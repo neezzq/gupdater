@@ -48,6 +48,34 @@ jobs:
           $p = Start-Process -FilePath dist\GUpdater.exe -ArgumentList "--demo", "--smoke-test" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "window smoke test exited with $($p.ExitCode)" }
 
+      - name: Check the autopilot in the built exe
+        shell: pwsh
+        run: |
+          # A real run on this machine: no launchers here, so it must skip them all, write a report and quit.
+          New-Item -ItemType Directory pilot | Out-Null
+          Copy-Item dist\GUpdater.exe pilot\GUpdater.exe
+          $p = Start-Process -FilePath pilot\GUpdater.exe -ArgumentList "--autopilot", "--now" -PassThru
+          $p | Wait-Process -Timeout 180
+          if (-not $p.HasExited) { $p | Stop-Process; throw "autopilot did not finish" }
+          $report = Get-ChildItem pilot -Recurse -Filter "*.txt" | Select-Object -First 1
+          if (-not $report) { throw "autopilot wrote no report" }
+          Get-Content $report.FullName -TotalCount 20
+
+      - name: Check updating the built exe in place
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory upd | Out-Null
+          Copy-Item dist\GUpdater.exe upd\GUpdater.exe
+          Copy-Item dist\GUpdater.exe upd\new.exe
+          $dir = (Resolve-Path upd).Path
+          $p = Start-Process -FilePath upd\GUpdater.exe -ArgumentList "--selftest-update", "$dir\new.exe", "$dir\after-update.txt" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "--selftest-update exited with $($p.ExitCode)" }
+          # The replaced exe restarts itself and writes a report.
+          for ($i = 0; $i -lt 60 -and -not (Test-Path upd\after-update.txt); $i++) { Start-Sleep -Seconds 1 }
+          if (-not (Test-Path upd\after-update.txt)) { throw "the updated exe did not start" }
+          if (Test-Path upd\new.exe) { throw "new.exe was not moved into place" }
+          Get-ChildItem upd | Format-Table Name, Length
+
       - uses: actions/upload-artifact@v4
         with:
           name: GUpdater

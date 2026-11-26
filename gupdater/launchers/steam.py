@@ -12,8 +12,8 @@ from pathlib import Path
 from gupdater.core import vdf
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
-from gupdater.core.registry import reg_str
-from gupdater.launchers.base import Launcher, check_paths
+from gupdater.core.registry import reg_str, reg_value
+from gupdater.launchers.base import Launcher, LaunchSpec, Progress, check_paths
 
 # EAppState bits from the Steam client.
 UPDATE_REQUIRED = 2
@@ -74,6 +74,38 @@ class Steam(Launcher):
     id = "steam"
     name = "Steam"
     process_names = ("steam.exe",)
+    helper_processes = ("steamservice.exe",)
+    start_args = ("-silent",)
+
+    def launch_spec(self, ctx: SystemContext, scan: LauncherScan) -> LaunchSpec | None:
+        spec = super().launch_spec(ctx, scan)
+        if spec is None:
+            return None
+        # Games live inside the Steam folder: only Steam's own processes count.
+        return LaunchSpec(
+            command=spec.command,
+            process_names=spec.process_names,
+            close_command=(spec.command[0], "-shutdown"),
+        )
+
+    def progress(self, ctx: SystemContext) -> Progress:
+        scan = self.scan(ctx)
+        active_user = reg_value(ctx.registry, r"HKCU\Software\Valve\Steam\ActiveProcess", "ActiveUser")
+        return Progress(
+            busy=any(g.status is GameStatus.UPDATING for g in scan.games),
+            pending=[(g.game_id, g.name) for g in scan.games if g.status is GameStatus.UPDATE_REQUIRED],
+            logged_in=None if active_user is None else bool(active_user),
+        )
+
+    def nudge_commands(self, ctx, scan, pending):
+        # Verifying a game's files makes Steam download its update right away,
+        # even when the game is set to update only when launched.
+        if not scan.exe_path:
+            return []
+        return [
+            ((scan.exe_path, f"steam://validate/{appid}"), f"Steam сам не начал обновлять «{name}» — запускаю проверку файлов")
+            for appid, name in pending
+        ]
 
     def find_root(self, ctx: SystemContext, result: LauncherScan) -> Path | None:
         reg = ctx.registry

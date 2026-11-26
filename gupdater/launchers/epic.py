@@ -17,6 +17,8 @@ class Epic(Launcher):
     id = "epic"
     name = "Epic Games"
     process_names = ("epicgameslauncher.exe",)
+    helper_processes = ("epicwebhelper.exe",)
+    start_args = ("-silent",)
 
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:
         data_dir_reg = reg_str(ctx.registry, r"HKLM\SOFTWARE\WOW6432Node\Epic Games\EpicGamesLauncher", "AppDataPath")

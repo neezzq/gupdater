@@ -17,6 +17,11 @@ class BattleNet(Launcher):
     name = "Battle.net"
     process_names = ("battle.net.exe",)
 
+    def extra_folders(self, ctx: SystemContext) -> tuple[str, ...]:
+        # Downloads are done by Agent.exe, which lives in ProgramData.
+        agent = ctx.env_path("PROGRAMDATA", "Battle.net")
+        return (str(agent),) if agent else ()
+
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:
         exe_paths = []
         for entry in ctx.uninstall_entries:

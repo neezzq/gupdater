@@ -188,3 +188,149 @@ def build_demo_context(root: Path) -> SystemContext:
         computer_name="CLUB-PC-07",
         os_name="Windows 11 (демо)",
     )
+
+
+# --- A demo PC whose launchers "download" on a fast-forward clock -----------
+
+MB = 1024 * 1024
+# launcher exe (lower case) -> (process name, [(from s, to s, read B/s, write B/s)], closes politely)
+_DEMO_PROFILES = {
+    "steam.exe": ("steam.exe", [(15, 140, 1 * MB, 12 * MB)], True),
+    "epicgameslauncher.exe": ("epicgameslauncher.exe", [(0, 15, 3 * MB, 0)], True),
+    "gamecenter.exe": ("gamecenter.exe", [(30, 200, MB // 2, 6 * MB)], True),
+    "battle.net launcher.exe": ("battle.net.exe", [(20, 320, 1 * MB, 9 * MB)], True),
+    "riotclientservices.exe": ("riotclientservices.exe", [(40, 160, MB // 2, 8 * MB)], True),
+    "eadesktop.exe": ("eadesktop.exe", [(0, 10, 2 * MB, 0)], False),  # ignores a polite close
+    "lgc.exe": ("lgc.exe", [], True),
+    "iccup launcher.exe": ("iccup launcher.exe", [(5, 15, MB // 5, MB // 10)], True),
+}
+# What Steam's manifests look like once the demo updates are done.
+_STEAM_UPDATED = {
+    "570": ("Dota 2", "dota 2 beta", "18712345", 41_000_000_000),
+    "578080": ("PUBG: BATTLEGROUNDS", "PUBG", "18500001", 40_000_000_000),
+}
+
+
+class _DemoProc:
+    def __init__(self, pid: int, name: str, started: float, profile: list, graceful: bool) -> None:
+        self.pid, self.name, self.started, self.profile, self.graceful = pid, name, started, list(profile), graceful
+
+    def counters(self, t: float) -> tuple[int, int]:
+        age = t - self.started
+        read = written = 0.0
+        for start, end, r, w in self.profile:
+            span = max(0.0, min(age, end) - start)
+            read += span * r
+            written += span * w
+        return int(read), int(written)
+
+
+class DemoSystem:
+    """Implements ``gupdater.autopilot.system.System`` for the demo PC."""
+
+    def __init__(self, world: "DemoWorld", speed: float = 100.0) -> None:
+        import threading
+
+        self.world = world
+        self.speed = speed
+        self.t = 0.0
+        self.wall0 = __import__("time").time()
+        self._lock = threading.Lock()
+        self._procs: dict[int, _DemoProc] = {}
+        self._events: list[tuple[float, object]] = []
+        self._next_pid = 1000
+        for name in ("explorer.exe", "smartshell.client.exe"):
+            self._add(name, [], True)
+
+    # System protocol
+    def now(self) -> float:
+        return self.t
+
+    def wall_time(self) -> float:
+        return self.wall0 + self.t
+
+    def sleep(self, seconds: float, stop) -> bool:
+        if stop.wait(seconds / self.speed):
+            return False
+        with self._lock:
+            self.t += seconds
+            due = [e for e in self._events if e[0] <= self.t]
+            self._events = [e for e in self._events if e[0] > self.t]
+        for _, action in due:
+            action()
+        return True
+
+    def start(self, command) -> None:
+        exe = Path(command[0]).name.lower()
+        args = list(command[1:])
+        with self._lock:
+            if exe == "steam.exe" and "-shutdown" in args:
+                self._remove({"steam.exe"}, force=True)
+                return
+            validate = next((a for a in args if a.startswith("steam://validate/")), None)
+            if exe == "steam.exe" and validate:
+                appid = validate.rsplit("/", 1)[1]
+                for proc in self._procs.values():
+                    if proc.name == "steam.exe":
+                        age = self.t - proc.started
+                        proc.profile.append((age, age + 150, 20 * MB, 15 * MB))
+                self._events.append((self.t + 150, lambda: self._steam_done(appid)))
+                return
+            if exe not in _DEMO_PROFILES:
+                raise OSError(f"нет такой программы: {command[0]}")
+            name, profile, graceful = _DEMO_PROFILES[exe]
+            self._add(name, profile, graceful)
+            if exe == "steam.exe":
+                self._events.append((self.t + 140, lambda: self._steam_done("578080")))
+
+    def processes(self):
+        from gupdater.autopilot.system import ProcInfo
+
+        with self._lock:
+            result = []
+            for p in self._procs.values():
+                read, written = p.counters(self.t)
+                result.append(ProcInfo(p.pid, p.name, None, self.wall0 + p.started, read, written))
+            return result
+
+    def close(self, names, force: bool) -> None:
+        with self._lock:
+            self._remove({n.lower() for n in names}, force)
+
+    def idle_seconds(self):
+        return None
+
+    # helpers
+    def running_names(self) -> frozenset[str]:
+        with self._lock:
+            return frozenset(p.name for p in self._procs.values())
+
+    def _add(self, name: str, profile: list, graceful: bool) -> None:
+        self._next_pid += 1
+        self._procs[self._next_pid] = _DemoProc(self._next_pid, name, self.t, profile, graceful)
+
+    def _remove(self, names: set[str], force: bool) -> None:
+        for pid, proc in list(self._procs.items()):
+            if proc.name in names and (force or proc.graceful):
+                del self._procs[pid]
+
+    def _steam_done(self, appid: str) -> None:
+        if appid not in _STEAM_UPDATED:
+            return
+        name, installdir, buildid, size = _STEAM_UPDATED[appid]
+        for manifest in self.world.root.rglob(f"appmanifest_{appid}.acf"):
+            manifest.write_text(_manifest(appid, name, installdir, 4, buildid, size), encoding="utf-8")
+
+
+class DemoWorld:
+    """The demo PC: files on disk plus simulated running programs."""
+
+    def __init__(self, root: Path, speed: float = 100.0) -> None:
+        self.root = root
+        self.base = build_demo_context(root / "pc")
+        self.system = DemoSystem(self, speed)
+
+    def context(self) -> SystemContext:
+        from dataclasses import replace
+
+        return replace(self.base, running=self.system.running_names())

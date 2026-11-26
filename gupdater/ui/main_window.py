@@ -1,247 +1,218 @@
-"""Main window of the recon version: launchers and games, plus the report."""
+"""Main window: header with the version and app updates, and two tabs."""
 
 from __future__ import annotations
 
-import traceback
 from pathlib import Path
-from typing import Callable
 
-from PySide6.QtCore import QThread, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QGuiApplication
+from PySide6.QtCore import QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
-    QFileDialog,
+    QApplication,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
-    QTreeWidget,
-    QTreeWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from gupdater import __version__
-from gupdater.core.context import SystemContext
-from gupdater.core.models import GameStatus, LauncherScan, format_size
-from gupdater.report import ScanResult, build_report, default_report_name, run_scan
-
-STATUS_COLORS = {
-    GameStatus.OK: "#1a7f37",
-    GameStatus.UPDATE_REQUIRED: "#c05600",
-    GameStatus.UPDATING: "#0b62d6",
-    GameStatus.BROKEN: "#c62828",
-    GameStatus.UNKNOWN: "#6b7280",
-}
-MUTED = "#8a8f98"
+from gupdater import selfupdate
+from gupdater.settings import Settings
+from gupdater.ui.autopilot_tab import AutopilotTab
+from gupdater.ui.games_tab import GamesTab
+from gupdater.ui.runtime import Runtime
+from gupdater.ui.style import GREEN, MUTED, RED
 
 
-class ScanThread(QThread):
-    done = Signal(object, object)  # (SystemContext, ScanResult)
-    failed = Signal(str)
-
-    def __init__(self, context_factory: Callable[[], SystemContext]) -> None:
-        super().__init__()
-        self._factory = context_factory
+class UpdateCheckThread(QThread):
+    done = Signal(object, str)  # Release or None, error text
 
     def run(self) -> None:
         try:
-            ctx = self._factory()
-            self.done.emit(ctx, run_scan(ctx))
-        except Exception:
-            self.failed.emit(traceback.format_exc())
+            self.done.emit(selfupdate.fetch_latest(), "")
+        except selfupdate.UpdateError as exc:
+            self.done.emit(None, str(exc))
+
+
+class DownloadThread(QThread):
+    progress = Signal(int, int)
+    done = Signal(str, str)  # path, error text
+
+    def __init__(self, release: selfupdate.Release, dest: Path) -> None:
+        super().__init__()
+        self._release = release
+        self._dest = dest
+        self.cancelled = False
+
+    def run(self) -> None:
+        try:
+            path = selfupdate.download(
+                self._release, self._dest, progress=self.progress.emit, cancelled=lambda: self.cancelled
+            )
+            self.done.emit(str(path), "")
+        except selfupdate.UpdateError as exc:
+            self.done.emit("", str(exc))
 
 
 class MainWindow(QMainWindow):
     scan_finished = Signal()
 
-    def __init__(self, context_factory: Callable[[], SystemContext], demo: bool = False) -> None:
+    def __init__(self, runtime: Runtime, settings: Settings, updated_from: str | None = None) -> None:
         super().__init__()
-        self._factory = context_factory
-        self._thread: ScanThread | None = None
-        self._report = ""
-        self._result: ScanResult | None = None
+        self.runtime = runtime
+        self.settings = settings
+        self._release: selfupdate.Release | None = None
+        self._check_thread: UpdateCheckThread | None = None
+        self._download: DownloadThread | None = None
 
-        title = f"GUpdater {__version__}" + (" — демо" if demo else "")
-        self.setWindowTitle(title)
-        self.resize(1180, 720)
+        self.setWindowTitle(f"GUpdater {__version__}" + (" — демо" if runtime.demo else ""))
+        self.resize(1240, 820)
 
-        header = QLabel("GUpdater")
-        header_font = header.font()
-        header_font.setPointSize(header_font.pointSize() + 8)
-        header_font.setBold(True)
-        header.setFont(header_font)
-        subtitle = QLabel(
-            "Этап 1 — разведка. Программа ищет лаунчеры и игры на этом компьютере и готовит отчёт. "
-            "Она ничего не меняет и не обновляет."
-            + ("\nДЕМО: показаны ненастоящие данные." if demo else "")
-        )
-        subtitle.setWordWrap(True)
-        subtitle.setStyleSheet(f"color: {MUTED};")
+        title = QLabel("GUpdater")
+        font = title.font()
+        font.setPointSize(font.pointSize() + 8)
+        font.setBold(True)
+        title.setFont(font)
+        version = QLabel(f"версия {__version__}" + ("  ·  ДЕМО: ненастоящие данные" if runtime.demo else ""))
+        version.setStyleSheet(f"color: {MUTED};")
+        self.update_status = QLabel()
+        self.update_button = QPushButton("Проверить обновления программы")
+        self.update_button.clicked.connect(self._on_update_button)
 
-        self.rescan_button = QPushButton("Сканировать заново")
-        self.save_button = QPushButton("Сохранить отчёт…")
-        self.copy_button = QPushButton("Скопировать отчёт")
-        self.save_button.setDefault(True)
-        self.rescan_button.clicked.connect(self.rescan)
-        self.save_button.clicked.connect(self.save_report)
-        self.copy_button.clicked.connect(self.copy_report)
-        self.summary = QLabel()
+        header = QHBoxLayout()
+        header.addWidget(title)
+        header.addSpacing(10)
+        header.addWidget(version)
+        header.addStretch(1)
+        header.addWidget(self.update_status)
+        header.addWidget(self.update_button)
 
-        buttons = QHBoxLayout()
-        for button in (self.rescan_button, self.save_button, self.copy_button):
-            buttons.addWidget(button)
-        buttons.addStretch(1)
-        buttons.addWidget(self.summary)
-
-        self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Лаунчер / игра", "Статус", "Версия", "Размер", "Где находится"])
-        self.tree.setAlternatingRowColors(True)
-        self.tree.setUniformRowHeights(True)
-        head = self.tree.header()
-        head.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        head.setStretchLastSection(True)
-        self.tree.setColumnWidth(0, 270)
-        self.tree.setColumnWidth(1, 330)
-        self.tree.setColumnWidth(2, 130)
-        self.tree.setColumnWidth(3, 80)
+        self.games = GamesTab(runtime, self._show_status)
+        self.autopilot = AutopilotTab(runtime, settings, self._show_status)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.autopilot, "Автопилот")
+        self.tabs.addTab(self.games, "Игры на этом ПК")
+        self.games.scanned.connect(self.autopilot.set_scan)
+        self.games.scan_finished.connect(self.scan_finished)
+        self.autopilot.run_finished.connect(self.games.rescan)
+        self.autopilot.running_changed.connect(lambda running: self.update_button.setEnabled(not running))
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(16, 14, 16, 10)
-        layout.setSpacing(10)
-        layout.addWidget(header)
-        layout.addWidget(subtitle)
-        layout.addLayout(buttons)
-        layout.addWidget(self.tree, 1)
+        layout.setContentsMargins(16, 12, 16, 8)
+        layout.addLayout(header)
+        layout.addWidget(self.tabs, 1)
         central = QWidget()
         central.setLayout(layout)
         self.setCentralWidget(central)
 
-        self._set_busy(True)
-        QTimer.singleShot(0, self.rescan)
+        if updated_from:
+            self._show_status(f"Программа обновлена: {updated_from} → {__version__}")
+            self._set_update_status(f"Обновлено до {__version__}", GREEN)
+        QTimer.singleShot(0, self.games.rescan)
+        if settings.check_app_updates and not runtime.demo:
+            QTimer.singleShot(1500, lambda: self.check_updates(silent=True))
 
-    # --- scanning -------------------------------------------------------
+    # --- status -------------------------------------------------------------
 
-    def rescan(self) -> None:
-        if self._thread and self._thread.isRunning():
+    def _show_status(self, text: str) -> None:
+        self.statusBar().showMessage(text)
+
+    def _set_update_status(self, text: str, color: str = MUTED) -> None:
+        self.update_status.setText(text)
+        self.update_status.setStyleSheet(f"color: {color};")
+
+    # --- updating GUpdater itself --------------------------------------------
+
+    def _on_update_button(self) -> None:
+        if self._release and selfupdate.is_newer(self._release.version):
+            self.install_update(self._release)
+        else:
+            self.check_updates(silent=False)
+
+    def check_updates(self, silent: bool = False) -> None:
+        if self._check_thread and self._check_thread.isRunning():
             return
-        self._set_busy(True)
-        self.statusBar().showMessage("Ищу лаунчеры и игры…")
-        self._thread = ScanThread(self._factory)
-        self._thread.done.connect(self._on_done)
-        self._thread.failed.connect(self._on_failed)
-        self._thread.start()
+        self.update_button.setEnabled(False)
+        self._set_update_status("Проверяю…")
+        self._check_thread = UpdateCheckThread()
+        self._check_thread.done.connect(lambda release, error: self._on_checked(release, error, silent))
+        self._check_thread.start()
 
-    def _set_busy(self, busy: bool) -> None:
-        self.rescan_button.setEnabled(not busy)
-        self.save_button.setEnabled(not busy and bool(self._report))
-        self.copy_button.setEnabled(not busy and bool(self._report))
+    def _on_checked(self, release, error: str, silent: bool) -> None:
+        self.update_button.setEnabled(not self.autopilot.is_running)
+        if error:
+            self._set_update_status("Не удалось проверить обновления", RED)
+            self.update_status.setToolTip(error)
+            if not silent:
+                QMessageBox.warning(self, "Обновление программы", error)
+            return
+        self._release = release
+        if selfupdate.is_newer(release.version):
+            self._set_update_status(f"Доступна версия {release.version}", GREEN)
+            self.update_button.setText(f"Обновить до {release.version}")
+            self.update_button.setStyleSheet("font-weight: bold;")
+        else:
+            self._set_update_status("У вас последняя версия")
+            self.update_button.setText("Проверить обновления программы")
+            self.update_button.setStyleSheet("")
 
-    def _on_done(self, ctx: SystemContext, result: ScanResult) -> None:
-        self._result = result
-        self._report = build_report(result, ctx)
-        self._populate(result)
-        found = sum(1 for s in result.scans if s.installed)
-        games = sum(len(s.games) for s in result.scans)
-        updates = sum(s.updates_needed for s in result.scans)
-        self.summary.setText(
-            f"Лаунчеров: {found} из {len(result.scans)} · игр: {games}"
-            + (f" · нужно обновить: {updates}" if updates else "")
-        )
-        self.statusBar().showMessage(
-            f"Готово ({result.finished_at:%H:%M}). Сохраните отчёт и пришлите его в чат."
-        )
-        self._set_busy(False)
-        self.scan_finished.emit()
-
-    def _on_failed(self, details: str) -> None:
-        self._set_busy(False)
-        self.rescan_button.setEnabled(True)
-        self.statusBar().showMessage("Поиск завершился с ошибкой")
-        QMessageBox.critical(self, "Ошибка", f"Не удалось выполнить поиск:\n\n{details}")
-        self.scan_finished.emit()
-
-    def _populate(self, result: ScanResult) -> None:
-        self.tree.clear()
-        bold = QFont(self.tree.font())
-        bold.setBold(True)
-        for scan in result.scans:
-            item = QTreeWidgetItem(
-                [scan.name, self._launcher_state(scan), "", "", scan.exe_path or "не найден"]
+    def install_update(self, release: selfupdate.Release) -> None:
+        if self.autopilot.is_running:
+            QMessageBox.information(self, "Обновление программы", "Дождитесь, пока автопилот закончит.")
+            return
+        exe = selfupdate.running_exe()
+        if exe is None:
+            QMessageBox.information(
+                self, "Обновление программы",
+                "Обновление по кнопке работает в GUpdater.exe. Сейчас откроется страница загрузки.",
             )
-            item.setFont(0, bold)
-            if not scan.installed:
-                for col in range(5):
-                    item.setForeground(col, QBrush(QColor(MUTED)))
-            elif scan.error:
-                item.setForeground(1, QBrush(QColor(STATUS_COLORS[GameStatus.BROKEN])))
-            tips = scan.notes + ([f"Ошибка: {scan.error}"] if scan.error else [])
-            if tips:
-                item.setToolTip(0, "\n".join(tips))
-                item.setToolTip(1, "\n".join(tips))
-            self.tree.addTopLevelItem(item)
-
-            for game in scan.games:
-                child = QTreeWidgetItem(
-                    [game.name, game.status.text, game.version or "", format_size(game.size_bytes), game.install_path or ""]
-                )
-                child.setForeground(1, QBrush(QColor(STATUS_COLORS[game.status])))
-                if game.note:
-                    child.setToolTip(1, game.note)
-                child.setToolTip(2, game.version or "")
-                child.setToolTip(4, game.install_path or "")
-                item.addChild(child)
-            for note in scan.notes:
-                child = QTreeWidgetItem(["ℹ " + note])
-                child.setForeground(0, QBrush(QColor(MUTED)))
-                item.addChild(child)
-                child.setFirstColumnSpanned(True)  # only works once the item is in the tree
-            item.setToolTip(4, scan.exe_path or "")
-            item.setExpanded(scan.installed)
-
-    @staticmethod
-    def _launcher_state(scan: LauncherScan) -> str:
-        if not scan.installed:
-            return "Не найден"
-        parts = ["Установлен"]
-        if scan.running:
-            parts.append("запущен")
-        parts.append(f"игр: {len(scan.games)}")
-        if scan.updates_needed:
-            parts.append(f"обновить: {scan.updates_needed}")
-        if scan.error:
-            parts.append("есть ошибка")
-        return " · ".join(parts)
-
-    # --- report ---------------------------------------------------------
-
-    def save_report(self) -> None:
-        if not self._result:
+            QDesktopServices.openUrl(QUrl(release.page_url))
             return
-        desktop = Path.home() / "Desktop"
-        folder = desktop if desktop.is_dir() else Path.home()
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Сохранить отчёт",
-            str(folder / default_report_name(self._result)),
-            "Текстовый файл (*.txt)",
+        answer = QMessageBox.question(
+            self, "Обновление программы",
+            f"Скачать и установить GUpdater {release.version}?\nПрограмма закроется и сразу откроется снова.",
         )
-        if not path:
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        dialog = QProgressDialog(f"Скачиваю GUpdater {release.version}…", "Отмена", 0, 100, self)
+        dialog.setWindowTitle("Обновление программы")
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        self._download = DownloadThread(release, selfupdate.download_path(exe))
+        self._download.progress.connect(
+            lambda done, total: dialog.setValue(int(done * 100 / total) if total else 0)
+        )
+        dialog.canceled.connect(lambda: setattr(self._download, "cancelled", True))
+        self._download.done.connect(lambda path, error: self._on_downloaded(path, error, exe, dialog))
+        self._download.start()
+
+    def _on_downloaded(self, path: str, error: str, exe: Path, dialog: QProgressDialog) -> None:
+        dialog.close()
+        if error:
+            if error != "Загрузка отменена":
+                QMessageBox.warning(self, "Обновление не установлено", error)
             return
         try:
-            Path(path).write_text(self._report, encoding="utf-8-sig")
-        except OSError as exc:
-            QMessageBox.warning(self, "Не удалось сохранить", str(exc))
+            selfupdate.install(Path(path), exe)
+            selfupdate.restart(exe, ["--updated-from", __version__])
+        except (selfupdate.UpdateError, OSError) as exc:
+            Path(path).unlink(missing_ok=True)
+            QMessageBox.critical(self, "Обновление не установлено", str(exc))
             return
-        self.statusBar().showMessage(f"Отчёт сохранён: {path}")
-        QMessageBox.information(self, "Отчёт сохранён", f"Отчёт сохранён в файл:\n{path}\n\nПришлите этот файл в чат.")
+        QApplication.quit()
 
-    def copy_report(self) -> None:
-        if self._report:
-            QGuiApplication.clipboard().setText(self._report)
-            self.statusBar().showMessage("Отчёт скопирован — вставьте его в чат (Ctrl+V)")
+    # --- closing ------------------------------------------------------------
 
-    @property
-    def report_text(self) -> str:
-        return self._report
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self.autopilot.is_running:
+            answer = QMessageBox.question(self, "Автопилот работает", "Автопилот ещё работает. Остановить его и закрыть?")
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self.autopilot.stop()
+            self.autopilot.wait_finished(15_000)
+        event.accept()
