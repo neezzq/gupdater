@@ -48,6 +48,7 @@ class Lesta(Launcher):
     id = "lesta"
     name = "Lesta Game Center"
     process_names = _EXE_NAMES
+    program_names = ("lesta game center", "игровой центр lesta")
 
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:
         center = ctx.env_path("PROGRAMDATA", "Lesta", "GameCenter")

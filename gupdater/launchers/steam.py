@@ -74,6 +74,7 @@ class Steam(Launcher):
     id = "steam"
     name = "Steam"
     process_names = ("steam.exe",)
+    program_names = ("steam",)
     helper_processes = ("steamservice.exe",)
     start_args = ("-silent",)
 

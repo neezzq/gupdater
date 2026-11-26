@@ -13,6 +13,7 @@ class EA(Launcher):
     id = "ea"
     name = "EA app"
     process_names = ("eadesktop.exe", "eabackgroundservice.exe", "origin.exe")
+    program_names = ("ea app", "ea desktop")
     helper_processes = ("ealocalhostsvc.exe",)
 
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:

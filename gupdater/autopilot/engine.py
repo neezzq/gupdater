@@ -17,7 +17,7 @@ from typing import Callable, Sequence
 
 from gupdater.autopilot.system import ProcInfo, System
 from gupdater.core.context import SystemContext
-from gupdater.core.models import GameStatus, LauncherScan
+from gupdater.core.models import GameStatus, LauncherScan, format_size
 from gupdater.launchers.base import Launcher, LaunchSpec, Progress
 from gupdater.settings import Settings
 
@@ -58,6 +58,7 @@ class EngineSettings:
     nudge_stuck: bool = True
     nudge_after_s: float = 60  # the launcher's start-up and login, before stuck games are watched
     stuck_s: float = 60        # pending but idle this long -> nudge the launcher
+    max_nudges: int = 2        # per game; Steam may ignore a nudge that comes while it is busy
     close_wait_s: float = 30   # how long a launcher gets to quit politely
     # Written this much without a visible version change still counts as an update.
     heavy_write_bytes: int = 200 * 1024 * 1024
@@ -87,6 +88,7 @@ class LauncherRun:
     written_bytes: int = 0
     rate: float = 0.0
     changes: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def duration_s(self) -> float:
@@ -150,6 +152,20 @@ def version_changes(before: LauncherScan, after: LauncherScan) -> list[str]:
         if prev and prev.version and game.version and prev.version != game.version:
             changes.append(f"{game.name}: {prev.version} → {game.version}")
     return changes
+
+
+def size_warnings(before: LauncherScan, after: LauncherScan) -> list[str]:
+    """Games that suddenly take far less space: worth a look by a human."""
+    old = {g.game_id: g for g in before.games}
+    warnings = []
+    for game in after.games:
+        prev = old.get(game.game_id)
+        if prev and prev.size_bytes and game.size_bytes and prev.size_bytes > 1024**3 and game.size_bytes < prev.size_bytes / 2:
+            warnings.append(
+                f"«{game.name}» теперь занимает {format_size(game.size_bytes)} вместо {format_size(prev.size_bytes)} — "
+                "проверьте, что игра на месте и запускается"
+            )
+    return warnings
 
 
 def format_rate(bytes_per_s: float) -> str:
@@ -306,7 +322,7 @@ class Autopilot:
         t0 = previous = system.now()
         last_active: float | None = None
         stuck_since: float | None = None
-        nudged: set[str] = set()
+        nudges: dict[str, int] = {}
         progress = Progress()
         told_pending = told_login = False
         while True:
@@ -338,17 +354,20 @@ class Autopilot:
                 outcome, message = Outcome.FAILED, "не выполнен вход в аккаунт, скачивать обновления некому"
                 break
 
-            stuck = [(gid, name) for gid, name in progress.pending if gid not in nudged]
+            stuck = [(gid, name) for gid, name in progress.pending if nudges.get(gid, 0) < s.max_nudges]
             if s.nudge_stuck and elapsed >= s.nudge_after_s and stuck and progress.busy is not True:
                 stuck_since = stuck_since if stuck_since is not None else t
                 if t - stuck_since >= s.stuck_s:
-                    for command, text in launcher.nudge_commands(self.ctx_factory(), before, stuck):
-                        self.log(text, run)
+                    # One game at a time: Steam drops a second command that arrives while it is busy.
+                    gid, name = stuck[0]
+                    again = " (ещё раз)" if nudges.get(gid) else ""
+                    for command, text in launcher.nudge_commands(self.ctx_factory(), before, [(gid, name)]):
+                        self.log(text + again, run)
                         try:
                             system.start(command)
                         except OSError as exc:
                             self.log(f"не получилось: {exc}", run)
-                    nudged.update(gid for gid, _ in stuck)
+                    nudges[gid] = nudges.get(gid, 0) + 1
                     stuck_since = None
                     last_active = t  # give the launcher a full quiet period to react
             else:
@@ -383,15 +402,25 @@ class Autopilot:
             self._close(spec, meter, run)
 
         after = launcher.scan(self.ctx_factory())
-        run.changes = version_changes(before, after)
-        for change in run.changes:
-            self.log(change, run)
+        game_changes = version_changes(before, after)
+        self_changed = bool(before.version and after.version and before.version != after.version)
+        run.changes = game_changes + ([f"{launcher.name} (сам лаунчер): {before.version} → {after.version}"] if self_changed else [])
+        run.warnings = size_warnings(before, after)
+        for line in run.changes:
+            self.log(line, run)
+        for line in run.warnings:
+            self.log("⚠ " + line, run)
         if outcome is None:
             still = [g.name for g in after.games if g.status is GameStatus.UPDATE_REQUIRED]
             if still:
                 outcome, message = Outcome.NOT_FINISHED, "ждут обновления: " + ", ".join(still)
-            elif run.changes or run.written_bytes >= s.heavy_write_bytes:
+            elif game_changes:
                 outcome = Outcome.UPDATED
+            elif self_changed:
+                outcome, message = Outcome.UPDATED, "обновился сам лаунчер, версии игр прежние"
+            elif run.written_bytes >= s.heavy_write_bytes:
+                outcome = Outcome.UPDATED
+                message = f"версии игр не изменились, но лаунчер записал ≈{format_size(run.written_bytes)}"
             else:
                 outcome = Outcome.NOTHING
         self._finish(run, outcome, message)
@@ -416,5 +445,5 @@ class Autopilot:
                 return
         left = {p.name for p in meter.matching(system.processes())}
         if left:
-            self.log("не закрылся сам — завершаю принудительно", run)
+            self.log("сам не закрылся (видимо, свернулся в трей) — закрываю принудительно", run)
             system.close(left, force=True)

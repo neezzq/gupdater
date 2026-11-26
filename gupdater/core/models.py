@@ -44,6 +44,8 @@ class LauncherScan:
     name: str
     installed: bool = False
     exe_path: str | None = None
+    # The launcher program's own version (from the Windows programs list).
+    version: str | None = None
     running: bool = False
     games: list[Game] = field(default_factory=list)
     # Plain-language observations shown to the user ("Сохранённый вход: есть").

@@ -33,6 +33,7 @@ class Riot(Launcher):
     id = "riot"
     name = "Riot Client"
     process_names = ("riotclientservices.exe", "riot client.exe", "riotclientux.exe")
+    program_names = ("riot client",)
     helper_processes = ("riotclientuxrender.exe",)
 
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:

@@ -361,3 +361,59 @@ def test_activity_meter_counts_new_processes_and_folders(tmp_path):
     helper = ProcInfo(2, "agent.exe", str(tmp_path / "agent" / "agent.exe"), 250.0, 7, 8)
     other = ProcInfo(3, "game.exe", str(tmp_path / "game.exe"), 250.0, 1000, 1000)
     assert meter.sample([a2, helper, other], wall=300.0) == (5 + 7, 10 + 8)
+
+
+def test_stuck_games_are_nudged_one_at_a_time_and_retried_once(tmp_path):
+    """From a real run: two validate commands sent at once, Steam acted on one."""
+    system = FakeSystem()
+    state = {"done": set(), "busy_until": -1.0}
+
+    def progress():
+        pending = [(gid, name) for gid, name in (("271590", "GTA V"), ("570", "Dota 2")) if gid not in state["done"]]
+        return Progress(busy=system.t < state["busy_until"], pending=pending, logged_in=True)
+
+    launcher = FakeLauncher(tmp_path, system, progress=progress, nudge=True)
+    nudge_times = []
+
+    def handler(sys_, command):
+        if len(command) == 1:
+            sys_.add_proc("fake.exe")
+            return
+        gid = command[1].rsplit("/", 1)[1]
+        nudge_times.append((gid, sys_.t))
+        if gid == "570" and sum(1 for g, _ in nudge_times if g == "570") == 1:
+            return  # the first nudge for Dota 2 is ignored, like on the real PC
+        state["busy_until"] = sys_.t + 100
+        state["done"].add(gid)
+
+    system.on_start[str(launcher.exe)] = handler
+    pilot = make_pilot([launcher], system)
+    run = pilot.run()[0]
+
+    assert [gid for gid, _ in nudge_times] == ["271590", "570", "570"]
+    assert nudge_times[1][1] - nudge_times[0][1] >= 100  # the second game waits for the first to finish
+    assert "(ещё раз)" in "\n".join(pilot.log_lines)
+    assert run.outcome is Outcome.NOTHING  # nothing pending any more; versions did not change in this fake
+
+
+def test_launcher_self_update_and_shrunken_game_are_reported(tmp_path):
+    from gupdater.core.models import Game
+
+    system = FakeSystem()
+    launcher = FakeLauncher(tmp_path, system)
+    launcher._scan_orig = launcher._scan
+
+    def scan(ctx, result):
+        launcher._scan_orig(ctx, result)
+        late = system.t > 100
+        result.version = "26.2" if late else "26.1"
+        result.games = [Game(name="GTA V", game_id="g1", version="1", size_bytes=272 * 1024**2 if late else 120 * 1024**3)]
+
+    launcher._scan = scan
+    system.on_start[str(launcher.exe)] = downloads_on_start("fake.exe", [(10, 40, 0, 10 * MB)])
+    pilot = make_pilot([launcher], system)
+    run = pilot.run()[0]
+    assert run.outcome is Outcome.UPDATED
+    assert run.message == "обновился сам лаунчер, версии игр прежние"
+    assert run.changes == ["Fake (сам лаунчер): 26.1 → 26.2"]
+    assert run.warnings and "272 МБ вместо 120.0 ГБ" in run.warnings[0]

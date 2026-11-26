@@ -17,6 +17,7 @@ class Epic(Launcher):
     id = "epic"
     name = "Epic Games"
     process_names = ("epicgameslauncher.exe",)
+    program_names = ("epic games launcher",)
     helper_processes = ("epicwebhelper.exe",)
     start_args = ("-silent",)
 

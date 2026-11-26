@@ -47,6 +47,8 @@ class Launcher(ABC):
     # Autopilot skips the launcher when no games were found (False where
     # game detection is incomplete and the launcher may still need a run).
     skip_without_games: ClassVar[bool] = True
+    # Names of the launcher itself in the Windows programs list (lower case).
+    program_names: ClassVar[tuple[str, ...]] = ()
 
     def launch_spec(self, ctx: SystemContext, scan: LauncherScan) -> LaunchSpec | None:
         """None when the launcher's program file is not known."""
@@ -77,6 +79,12 @@ class Launcher(ABC):
             result.error = f"{type(exc).__name__}: {exc}"
             result.evidence.append(traceback.format_exc().strip())
         self._drop_missing_games(result)
+        if result.installed and not result.version:
+            result.version = next(
+                (e.display_version for e in ctx.uninstall_entries
+                 if e.display_name.lower() in self.program_names and e.display_version),
+                None,
+            )
         result.running = self.is_running(ctx)
         result.games.sort(key=lambda g: g.name.lower())
         return result

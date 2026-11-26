@@ -47,12 +47,13 @@ def build_run_report(
         details = []
         if run.duration_s and run.outcome not in (Outcome.SKIPPED, None):
             details.append(format_duration(run.duration_s))
-        if run.written_bytes >= 1024 * 1024:
+        if run.written_bytes >= 1024 * 1024 and "записал" not in run.message:
             details.append(f"записано на диск ≈{format_size(run.written_bytes)}")
         if run.message:
             details.append(run.message)
         lines.append(head + (" — " + ", ".join(details) if details else ""))
         lines += [f"    {change}" for change in run.changes]
+        lines += [f"    ⚠ {warning}" for warning in run.warnings]
     lines += ["", "--- Журнал ---", *log_lines]
     return "\n".join(lines) + "\n"
 

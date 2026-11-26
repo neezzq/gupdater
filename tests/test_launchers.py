@@ -161,3 +161,28 @@ def test_admin_pc_from_the_first_real_report(tmp_path):
     vk = scans["vkplay"]
     assert vk.exe_path == str(local / "GameCenter" / "GameCenter.exe")
     assert [(g.name, g.game_id, g.version) for g in vk.games] == [("ArcheAge", "gcgame_0.3001", "1.691")]
+
+
+def _pb_field(number: int, payload: bytes) -> bytes:
+    def varint(n):
+        out = b""
+        while True:
+            byte, n = n & 0x7F, n >> 7
+            out += bytes([byte | (0x80 if n else 0)])
+            if not n:
+                return out
+    return varint(number << 3 | 2) + varint(len(payload)) + payload
+
+
+def test_battlenet_versions_come_from_product_db(tmp_path):
+    from gupdater.launchers.battlenet import product_versions
+
+    def install(uid, version):
+        state = _pb_field(1, _pb_field(6, b"1") + _pb_field(7, version.encode()))
+        return _pb_field(1, _pb_field(1, uid.encode()) + _pb_field(2, b"wtcg") + _pb_field(4, state))
+
+    db = tmp_path / "product.db"
+    db.write_bytes(install("hs_beta", "33.2.0.230002") + install("s2", "5.0.14.93272") + _pb_field(2, b"\x01\x02"))
+    assert product_versions(db) == {"hs_beta": "33.2.0.230002", "s2": "5.0.14.93272"}
+    db.write_bytes(b"\xff\xff not protobuf")
+    assert product_versions(db) == {}

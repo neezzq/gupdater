@@ -143,7 +143,7 @@ class GamesTab(QWidget):
         bold = QFont(self.tree.font())
         bold.setBold(True)
         for scan in result.scans:
-            item = QTreeWidgetItem([scan.name, launcher_state(scan), "", "", scan.exe_path or "не найден"])
+            item = QTreeWidgetItem([scan.name, launcher_state(scan), scan.version or "", "", scan.exe_path or "не найден"])
             item.setFont(0, bold)
             if not scan.installed:
                 for col in range(5):

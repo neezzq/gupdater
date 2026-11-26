@@ -22,7 +22,7 @@ from gupdater.launchers import ALL_LAUNCHERS
 KEYWORDS = (
     "steam", "epic", "battle.net", "blizzard", "riot", "electronic arts", "ea app", "origin",
     "vk play", "vkplay", "gamecenter", "game center", "игровой центр", "mail.ru", "my.games",
-    "lesta", "леста", "wargaming", "iccup", "warcraft", "smartshell",
+    "lesta", "леста", "wargaming", "iccup", "warcraft", "smartshell", "gcgame_", "astrum",
 )
 _PROCESS_KEYWORDS = (
     "steam", "epic", "battle.net", "blizzard", "riot", "valorant", "league", "eadesktop",
@@ -118,7 +118,8 @@ def _launcher_block(scan: LauncherScan) -> list[str]:
         lines.append(f"[ ] {scan.name} — не найден")
     else:
         state = " (запущен)" if scan.running else ""
-        lines.append(f"[x] {scan.name} — {scan.exe_path or 'путь не определён'}{state}")
+        version = f" {scan.version}" if scan.version else ""
+        lines.append(f"[x] {scan.name}{version} — {scan.exe_path or 'путь не определён'}{state}")
         updates = f", нужно обновить: {scan.updates_needed}" if scan.updates_needed else ""
         lines.append(f"    Игр найдено: {len(scan.games)}{updates}")
     for game in scan.games:

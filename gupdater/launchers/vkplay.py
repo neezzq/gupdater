@@ -27,6 +27,7 @@ class VKPlay(Launcher):
     id = "vkplay"
     name = "VK Play"
     process_names = ("gamecenter.exe", "vkplay.exe", "vk play.exe", "vkplayloader.exe")
+    program_names = ("vk play игровой центр", "vk play")
 
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:
         folders: list[Path | None] = [
