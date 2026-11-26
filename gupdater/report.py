@@ -33,6 +33,8 @@ _PROTOCOL_HINTS = (
     "gamecenter", "lesta", "lgc", "wgc", "iccup", "mygames",
 )
 _FOLDER_ROOTS = ("PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA", "APPDATA")
+# Only folder names like these go into the report: the rest of a disk is nobody's business.
+_FOLDER_KEYWORDS = KEYWORDS + ("game", "игр", "riot", "astrum", "launcher", "лаунчер", "4game", "vk ")
 
 
 @dataclass
@@ -82,9 +84,9 @@ def collect_inventory(ctx: SystemContext) -> Inventory:
     for var in _FOLDER_ROOTS:
         base = ctx.env_path(var)
         if base and base.is_dir():
-            inv.folders[f"%{var}%"] = _list_names(base)
+            inv.folders[f"%{var}%"] = _game_related(_list_names(base))
     for drive in ctx.drives:
-        inv.folders[drive] = _list_names(Path(drive))
+        inv.folders[drive] = _game_related(_list_names(Path(drive)))
 
     inv.smartshell = (
         [f"программа: {e.display_name} — {e.install_location}" for e in inv.programs if "smartshell" in e.haystack]
@@ -94,7 +96,11 @@ def collect_inventory(ctx: SystemContext) -> Inventory:
     return inv
 
 
-def _list_names(folder: Path, limit: int = 300) -> list[str]:
+def _game_related(names: list[str]) -> list[str]:
+    return [n for n in names if any(k in n.lower() for k in _FOLDER_KEYWORDS)]
+
+
+def _list_names(folder: Path, limit: int = 1000) -> list[str]:
     try:
         names = sorted((p.name for p in folder.iterdir()), key=str.lower)
     except OSError:
@@ -169,7 +175,7 @@ def build_report(result: ScanResult, ctx: SystemContext) -> str:
     lines += [f"  {p}" for p in inv.processes] or ["  (нет)"]
     lines += ["", "-- Ссылки-протоколы лаунчеров --"]
     lines += [f"  {scheme}: {cmd}" for scheme, cmd in sorted(inv.protocols.items())] or ["  (нет)"]
-    lines += ["", "-- Папки --"]
+    lines += ["", "-- Папки (только связанные с играми) --"]
     for where, names in inv.folders.items():
         lines.append(f"  {where}: {', '.join(names) or '(пусто)'}")
     return sanitize("\n".join(lines) + "\n", ctx)

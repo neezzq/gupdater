@@ -11,7 +11,7 @@ from pathlib import Path
 
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
-from gupdater.launchers.base import Launcher, check_paths, exe_candidates, find_entries
+from gupdater.launchers.base import Launcher, check_paths, exe_candidates, find_entries, protocol_exe
 from gupdater.launchers.lesta import is_lesta_entry
 
 _LAUNCHER_WORDS = ("vk play", "vkplay", "game center", "gamecenter", "игровой центр")
@@ -37,12 +37,13 @@ class VKPlay(Launcher):
         ]
         launcher_entries = [e for e in ctx.uninstall_entries if _is_launcher_entry(e.display_name)]
         folders += [Path(e.install_location) for e in launcher_entries if e.install_location]
-        exe_paths = [p for folder in folders for p in exe_candidates(folder, *_EXE_NAMES)]
+        exe_paths = [protocol_exe(ctx, "vkplay")]
+        exe_paths += [p for folder in folders for p in exe_candidates(folder, *_EXE_NAMES)]
         exe = check_paths(result, exe_paths, "лаунчер VK Play")
         for entry in launcher_entries:
             result.evidence.append(f"программа: {entry.display_name} ({entry.publisher}) — {entry.install_location}")
 
-        for entry in find_entries(ctx, "gamecenter", "vkplay", "vk play"):
+        for entry in find_entries(ctx, "gcgame_", "gamecenter", "vkplay", "vk play"):
             if _is_launcher_entry(entry.display_name) or is_lesta_entry(entry):
                 continue
             result.games.append(

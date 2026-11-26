@@ -16,7 +16,14 @@ def test_report_lists_launchers_games_and_environment(demo_ctx):
 
 
 def test_report_has_no_account_names_tokens_or_user_folder(demo_ctx):
+    from pathlib import Path
+
+    d_drive = Path(demo_ctx.drives[1])
+    (d_drive / "private-scan-of-passport.pdf").write_text("")
+    (d_drive / "Accounting").mkdir()
     text = build_report(run_scan(demo_ctx), demo_ctx)
+    assert "passport" not in text and "Accounting" not in text  # unrelated files and folders stay private
+    assert "SteamLibrary" in text and "iCCup" in text
     assert SECRET_STEAM_ACCOUNT not in text
     assert "guest_two" not in text
     assert SECRET_TOKEN not in text

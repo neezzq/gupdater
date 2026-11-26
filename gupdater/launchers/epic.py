@@ -8,7 +8,7 @@ from pathlib import Path
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
 from gupdater.core.registry import reg_str
-from gupdater.launchers.base import Launcher, check_paths, find_entries
+from gupdater.launchers.base import Launcher, check_paths, find_entries, protocol_exe
 
 _EXE_TAIL = ("Launcher", "Portal", "Binaries")
 
@@ -36,6 +36,7 @@ class Epic(Launcher):
             if base
             for arch in ("Win64", "Win32")
         ]
+        exe_paths.append(protocol_exe(ctx, "com.epicgames.launcher"))
         exe = check_paths(result, exe_paths, "EpicGamesLauncher.exe")
 
         manifests = data_dir / "Manifests" if data_dir else None

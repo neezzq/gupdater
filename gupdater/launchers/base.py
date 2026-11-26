@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from typing import ClassVar, Iterable
 
 from gupdater.core.context import SystemContext, UninstallEntry
 from gupdater.core.models import LauncherScan
+from gupdater.core.registry import reg_str
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,9 @@ class Launcher(ABC):
     # Extra processes that do the downloading for this launcher.
     helper_processes: ClassVar[tuple[str, ...]] = ()
     start_args: ClassVar[tuple[str, ...]] = ()
+    # Autopilot skips the launcher when no games were found (False where
+    # game detection is incomplete and the launcher may still need a run).
+    skip_without_games: ClassVar[bool] = True
 
     def launch_spec(self, ctx: SystemContext, scan: LauncherScan) -> LaunchSpec | None:
         """None when the launcher's program file is not known."""
@@ -71,9 +76,23 @@ class Launcher(ABC):
         except Exception as exc:  # one broken detector must not stop the others
             result.error = f"{type(exc).__name__}: {exc}"
             result.evidence.append(traceback.format_exc().strip())
+        self._drop_missing_games(result)
         result.running = self.is_running(ctx)
         result.games.sort(key=lambda g: g.name.lower())
         return result
+
+    @staticmethod
+    def _drop_missing_games(result: LauncherScan) -> None:
+        """Programs lists keep entries of deleted games: a game without its folder is not installed."""
+        kept = []
+        for game in result.games:
+            if game.install_path and not Path(game.install_path).exists():
+                result.notes.append(f"«{game.name}» записана в Windows, но её папки нет ({game.install_path}) — похоже, удалена")
+            else:
+                kept.append(game)
+        result.games = kept
+        if result.installed and not result.exe_path and not kept:
+            result.installed = False
 
     def is_running(self, ctx: SystemContext) -> bool:
         return ctx.is_running(*self.process_names)
@@ -107,6 +126,28 @@ def find_entries(ctx: SystemContext, *needles: str) -> list[UninstallEntry]:
 def is_managed_by_other_launcher(entry: UninstallEntry) -> bool:
     """Steam registers its games as "Steam App <id>" with a ``steam://uninstall`` command."""
     return entry.key.lower().startswith("steam app ") or "steam://uninstall" in entry.uninstall_string.lower()
+
+
+_EXE_IN_COMMAND = re.compile(r'^\s*(?:"([^"]+?\.exe)"|(\S+?\.exe))', re.IGNORECASE)
+
+
+def exe_from_command(command: str) -> Path | None:
+    """The program in a command line such as ``"C:\\x\\setup.exe" /IU``."""
+    match = _EXE_IN_COMMAND.match(command or "")
+    if not match:
+        return None
+    return Path(match.group(1) or match.group(2))
+
+
+def expand_vars(ctx: SystemContext, text: str) -> str:
+    """Replace ``%LOCALAPPDATA%`` and the like, as Windows does in registry paths."""
+    return re.sub(r"%([^%]+)%", lambda m: ctx.env.get(m.group(1).upper(), m.group(0)), text or "")
+
+
+def protocol_exe(ctx: SystemContext, scheme: str) -> Path | None:
+    """The program a launcher registered for its ``scheme://`` links."""
+    command = reg_str(ctx.registry, f"HKCR\\{scheme}\\shell\\open\\command", "")
+    return exe_from_command(expand_vars(ctx, command))
 
 
 def exe_candidates(folder: str | Path | None, *names: str) -> list[Path]:

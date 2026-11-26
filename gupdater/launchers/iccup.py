@@ -18,6 +18,8 @@ _WAR3_EXES = ("war3.exe", "warcraft iii.exe", "frozen throne.exe")
 class ICCup(Launcher):
     id = "iccup"
     name = "iCCup"
+    # The launcher updates itself and its maps even when no game folder was recognised.
+    skip_without_games = False
 
     def is_running(self, ctx: SystemContext) -> bool:
         return any("iccup" in name for name in ctx.running)

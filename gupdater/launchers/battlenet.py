@@ -6,7 +6,7 @@ import re
 
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
-from gupdater.launchers.base import Launcher, check_paths, exe_candidates
+from gupdater.launchers.base import Launcher, check_paths, exe_candidates, protocol_exe
 
 _UID = re.compile(r"--uid=([\w.-]+)")
 _EXE_NAMES = ("Battle.net Launcher.exe", "Battle.net.exe")
@@ -27,6 +27,9 @@ class BattleNet(Launcher):
         for entry in ctx.uninstall_entries:
             if entry.display_name.lower() == "battle.net":
                 exe_paths += exe_candidates(entry.install_location, *_EXE_NAMES)
+        handler = protocol_exe(ctx, "battlenet")
+        if handler:
+            exe_paths += exe_candidates(handler.parent, *_EXE_NAMES)
         for var in ("PROGRAMFILES(X86)", "PROGRAMFILES"):
             exe_paths += exe_candidates(ctx.env_path(var, "Battle.net"), *_EXE_NAMES)
         exe = check_paths(result, exe_paths, "Battle.net")

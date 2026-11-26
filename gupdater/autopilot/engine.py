@@ -56,6 +56,7 @@ class EngineSettings:
     activity_bytes_per_s: float = 1024 * 1024
     close_after: bool = True
     nudge_stuck: bool = True
+    nudge_after_s: float = 60  # the launcher's start-up and login, before stuck games are watched
     stuck_s: float = 60        # pending but idle this long -> nudge the launcher
     close_wait_s: float = 30   # how long a launcher gets to quit politely
     # Written this much without a visible version change still counts as an update.
@@ -278,6 +279,9 @@ class Autopilot:
         if not before.installed:
             self._finish(run, Outcome.SKIPPED, "не установлен")
             return
+        if launcher.skip_without_games and not before.games:
+            self._finish(run, Outcome.SKIPPED, "игр не найдено")
+            return
         spec = launcher.launch_spec(self.ctx_factory(), before)
         if spec is None:
             self._finish(run, Outcome.SKIPPED, "не найден файл запуска")
@@ -304,6 +308,7 @@ class Autopilot:
         stuck_since: float | None = None
         nudged: set[str] = set()
         progress = Progress()
+        told_pending = told_login = False
         while True:
             self._wait(s.poll_s)
             t = system.now()
@@ -322,13 +327,19 @@ class Autopilot:
             if busy:
                 last_active = t
             warmed_up = elapsed >= s.warmup_s
+            if progress.logged_in and not told_login:
+                self.log("вход в аккаунт выполнен", run)
+                told_login = True
+            if progress.pending and not told_pending:
+                self.log("ждут обновления: " + ", ".join(name for _, name in progress.pending), run)
+                told_pending = True
 
             if warmed_up and progress.logged_in is False:
                 outcome, message = Outcome.FAILED, "не выполнен вход в аккаунт, скачивать обновления некому"
                 break
 
             stuck = [(gid, name) for gid, name in progress.pending if gid not in nudged]
-            if s.nudge_stuck and warmed_up and stuck and progress.busy is not True:
+            if s.nudge_stuck and elapsed >= s.nudge_after_s and stuck and progress.busy is not True:
                 stuck_since = stuck_since if stuck_since is not None else t
                 if t - stuck_since >= s.stuck_s:
                     for command, text in launcher.nudge_commands(self.ctx_factory(), before, stuck):
@@ -344,8 +355,17 @@ class Autopilot:
                 stuck_since = None
 
             quiet_since = max(last_active if last_active is not None else t0, t0 + s.warmup_s)
+            waiting = ", ".join(name for _, name in progress.pending)
             if busy:
                 self._set(run, f"Скачивает · {format_rate(run.rate)}")
+            elif stuck and s.nudge_stuck:
+                if stuck_since is None:
+                    self._set(run, f"Ждут обновления: {waiting} · жду, начнёт ли лаунчер сам")
+                else:
+                    left = max(0.0, s.stuck_s - (t - stuck_since))
+                    self._set(run, f"Ждут обновления: {waiting} · если не начнёт сам, через {format_duration(left)} подтолкну")
+            elif progress.pending:
+                self._set(run, f"Ждут обновления: {waiting}")
             elif not warmed_up:
                 self._set(run, "Запускается и ищет обновления…")
             else:

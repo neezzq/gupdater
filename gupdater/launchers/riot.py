@@ -7,7 +7,7 @@ from pathlib import Path
 
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
-from gupdater.launchers.base import Launcher, check_paths
+from gupdater.launchers.base import Launcher, check_paths, exe_from_command, protocol_exe
 
 KNOWN_NAMES = {
     "valorant": "VALORANT",
@@ -44,6 +44,12 @@ class Riot(Launcher):
             for key in ("rc_default", "rc_live", "rc_beta"):
                 if data.get(key):
                     exe_paths.append(Path(data[key]))
+        exe_paths.append(protocol_exe(ctx, "riotclient"))
+        exe_paths += [
+            exe_from_command(e.uninstall_string)
+            for e in ctx.uninstall_entries
+            if e.key.lower().startswith(_UNINSTALL_PREFIX)
+        ]
         exe_paths += ctx.drive_paths("Riot Games", "Riot Client", "RiotClientServices.exe")
         exe = check_paths(result, exe_paths, "RiotClientServices.exe")
         if exe:
@@ -86,6 +92,8 @@ class Riot(Launcher):
                     note=_NOTE,
                 )
         result.games.extend(found.values())
+        # Games whose folders are gone are dropped afterwards; with no client
+        # and no games left Riot counts as not installed.
         result.installed = exe is not None or bool(found)
 
         if not result.installed:

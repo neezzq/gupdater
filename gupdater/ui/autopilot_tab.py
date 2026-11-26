@@ -124,6 +124,9 @@ class AutopilotTab(QWidget):
         self.open_folder_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(reports_dir()))))
         self.stop_button.setEnabled(False)
         self.last_run = QLabel()
+        self.timing_hint = QLabel()
+        self.timing_hint.setWordWrap(True)
+        self.timing_hint.setStyleSheet(f"color: {MUTED};")
 
         top = QHBoxLayout()
         for button in (self.start_button, self.stop_button):
@@ -222,6 +225,7 @@ class AutopilotTab(QWidget):
         layout.setContentsMargins(0, 8, 0, 0)
         layout.addWidget(intro)
         layout.addLayout(top)
+        layout.addWidget(self.timing_hint)
         layout.addLayout(middle)
         layout.addWidget(log_box, 1)
 
@@ -234,6 +238,15 @@ class AutopilotTab(QWidget):
         self._fill_table()
         self._show_last_report()
         self._refresh_task_state()
+        self._update_timing_hint()
+
+    def _update_timing_hint(self) -> None:
+        least = self.warmup.value() + self.quiet.value()
+        self.timing_hint.setText(
+            f"Каждый лаунчер занимает не меньше {least} мин: {self.warmup.value()} мин на запуск и поиск "
+            f"обновлений и {self.quiet.value()} мин тишины в конце, чтобы убедиться, что загрузка закончилась. "
+            "Лаунчеры без игр пропускаются."
+        )
 
     # --- widgets ------------------------------------------------------------
 
@@ -320,6 +333,7 @@ class AutopilotTab(QWidget):
         s.schedule_time = self.schedule_time.time().toString("HH:mm")
         s.idle_minutes = self.idle.value()
         s.wait_free_hours = self.wait_free.value()
+        self._update_timing_hint()
         try:
             save_settings(s)
         except OSError as exc:

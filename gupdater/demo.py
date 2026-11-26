@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from gupdater.core import vdf
 from gupdater.core.context import SystemContext
 from gupdater.core.registry import DictRegistry
 
@@ -66,6 +67,8 @@ def build_demo_context(root: Path) -> SystemContext:
         if size_kb:
             values["EstimatedSize"] = size_kb
         reg.set(f"{UNINSTALL}\\{key}", values)
+        if location:
+            Path(location).mkdir(parents=True, exist_ok=True)
 
     # --- Steam: two libraries, one game waiting for an update, one updating
     steam = pf86 / "Steam"
@@ -96,6 +99,10 @@ def build_demo_context(root: Path) -> SystemContext:
         '\t"76561190000000002"\n\t{\n\t\t"AccountName"\t\t"guest_two"\n\t\t"RememberPassword"\t\t"0"\n\t}\n}\n',
     )
     reg.set(r"HKCU\Software\Valve\Steam", {"SteamPath": str(steam), "AutoLoginUser": SECRET_STEAM_ACCOUNT})
+    for library in (steam, library2):
+        for manifest in (library / "steamapps").glob("appmanifest_*.acf"):
+            installdir = vdf.load(manifest)["appstate"]["installdir"]
+            (library / "steamapps" / "common" / installdir).mkdir(parents=True, exist_ok=True)
     program("Steam App 1172470", "Apex Legends", "Electronic Arts", library2 / "steamapps" / "common" / "Apex Legends",
             uninstall=f'"{steam / "steam.exe"}" steam://uninstall/1172470')
 
@@ -113,6 +120,8 @@ def build_demo_context(root: Path) -> SystemContext:
                "AppCategories": ["addons"]},
     }.items():
         _write(manifests / f"{item_id}.item", json.dumps(data, ensure_ascii=False, indent=2))
+        if data.get("InstallLocation"):
+            Path(data["InstallLocation"]).mkdir(parents=True, exist_ok=True)
     _write(local / "EpicGamesLauncher" / "Saved" / "Config" / "Windows" / "GameUserSettings.ini",
            f"[RememberMe]\nEnable=True\nData={SECRET_TOKEN}\n")
 
@@ -144,6 +153,7 @@ def build_demo_context(root: Path) -> SystemContext:
                                       ("riot_client", "Riot Client", "")):
         _write(riot_data / "Metadata" / product / f"{product}.product_settings.yaml",
                f'product_install_full_path: "{c / "Riot Games" / folder}"\nshortcut_name: "{shortcut}"\n')
+        (c / "Riot Games" / folder).mkdir(parents=True, exist_ok=True)
     program("Riot Game valorant.live", "VALORANT", "Riot Games, Inc", c / "Riot Games" / "VALORANT" / "live")
     _write(local / "Riot Games" / "Riot Client" / "Data" / "RiotGamesPrivateSettings.yaml", f"token: {SECRET_TOKEN}\n")
 

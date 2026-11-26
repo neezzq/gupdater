@@ -13,7 +13,7 @@ from gupdater.core import vdf
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
 from gupdater.core.registry import reg_str, reg_value
-from gupdater.launchers.base import Launcher, LaunchSpec, Progress, check_paths
+from gupdater.launchers.base import Launcher, LaunchSpec, Progress, check_paths, protocol_exe
 
 # EAppState bits from the Steam client.
 UPDATE_REQUIRED = 2
@@ -115,6 +115,8 @@ class Steam(Launcher):
             reg_str(reg, r"HKLM\SOFTWARE\Valve\Steam", "InstallPath"),
         ]
         paths = [Path(c) for c in candidates if c]
+        handler = protocol_exe(ctx, "steam")
+        paths.append(handler.parent if handler else None)
         paths.append(ctx.env_path("PROGRAMFILES(X86)", "Steam"))
         if not ctx.is_windows:
             paths.append(ctx.env_path("HOME", ".steam", "steam"))

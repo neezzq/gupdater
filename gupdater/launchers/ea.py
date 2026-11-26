@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
-from gupdater.launchers.base import Launcher, check_paths, exe_candidates, is_managed_by_other_launcher
+from gupdater.launchers.base import Launcher, check_paths, exe_candidates, is_managed_by_other_launcher, protocol_exe
 
 _LAUNCHER_NAMES = {"ea app", "ea desktop", "origin"}
 
@@ -22,6 +22,7 @@ class EA(Launcher):
         for entry in ctx.uninstall_entries:
             if entry.display_name.lower() in ("ea app", "ea desktop"):
                 exe_paths += exe_candidates(entry.install_location, "EA Desktop\\EADesktop.exe", "EADesktop.exe")
+        exe_paths += [p for p in (protocol_exe(ctx, s) for s in ("origin2", "link2ea", "eadm")) if p and p.name.lower() == "eadesktop.exe"]
         exe = check_paths(result, exe_paths, "EADesktop.exe")
         origin = check_paths(result, exe_candidates(ctx.env_path("PROGRAMFILES(X86)", "Origin"), "Origin.exe"), "Origin.exe")
         if origin:

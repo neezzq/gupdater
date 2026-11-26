@@ -6,20 +6,25 @@ places; the recon report confirms or corrects that.
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from gupdater.core.context import SystemContext, UninstallEntry
 from gupdater.core.models import Game, GameStatus, LauncherScan
-from gupdater.launchers.base import Launcher, check_paths, exe_candidates
+from gupdater.launchers.base import Launcher, check_paths, exe_candidates, exe_from_command, protocol_exe
 
 _EXE_NAMES = ("lgc.exe", "lgc_api.exe")
+
+
+# A whole word: "Battlestate Games" (Escape from Tarkov) contains "lesta" too.
+_LESTA_WORD = re.compile(r"(?<![a-zа-яё])(lesta|леста)(?![a-zа-яё])")
 
 
 def is_lesta_entry(entry: UninstallEntry) -> bool:
     """Lesta's own programs: judged by name, publisher and uninstaller, not by folder."""
     text = f"{entry.display_name} {entry.publisher} {entry.uninstall_string}".lower()
-    return "lesta" in text or "леста" in text
+    return bool(_LESTA_WORD.search(text))
 
 
 def _is_launcher_entry(display_name: str) -> bool:
@@ -47,10 +52,16 @@ class Lesta(Launcher):
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:
         center = ctx.env_path("PROGRAMDATA", "Lesta", "GameCenter")
         lesta_entries = [e for e in ctx.uninstall_entries if is_lesta_entry(e)]
-        folders = [center] + [
-            Path(e.install_location) for e in lesta_entries if _is_launcher_entry(e.display_name) and e.install_location
-        ]
-        exe = check_paths(result, [p for f in folders for p in exe_candidates(f, *_EXE_NAMES)], "lgc.exe")
+        folders = [center]
+        for entry in lesta_entries:
+            if _is_launcher_entry(entry.display_name):
+                if entry.install_location:
+                    folders.append(Path(entry.install_location))
+                uninstaller = exe_from_command(entry.uninstall_string)  # ...\GameCenter\setup.exe
+                if uninstaller:
+                    folders.append(uninstaller.parent)
+        exe_paths = [protocol_exe(ctx, "lgc")] + [p for f in folders for p in exe_candidates(f, *_EXE_NAMES)]
+        exe = check_paths(result, exe_paths, "lgc.exe")
         if exe:
             result.exe_path = str(exe)
         apps = center / "apps" if center else None

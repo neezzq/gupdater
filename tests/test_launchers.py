@@ -107,4 +107,57 @@ def test_other_game_centers_are_not_vk_play(tmp_path):
     ctx = SystemContext(registry=reg, env={}, drives=[])
     scans = {s.launcher_id: s for s in run_scan(ctx).scans}
     assert not scans["vkplay"].installed
-    assert scans["lesta"].installed
+
+
+def test_admin_pc_from_the_first_real_report(tmp_path):
+    """Situations seen on a real PC (folder names made up)."""
+    from gupdater.core.registry import DictRegistry
+    from gupdater.demo import UNINSTALL
+
+    f, local = tmp_path / "F", tmp_path / "Local"
+    lgc_dir = f / "GAME" / "someone" / "tanki" / "Lesta" / "GameCenter"
+    tanks, eft, archeage = f / "Games" / "Tanki", f / "GAME" / "EFT", f / "VK Play" / "ArcheAge"
+    for path in (lgc_dir / "lgc.exe", lgc_dir / "setup.exe", tanks / "lgc_api.exe", eft / "Uninstall.exe",
+                 local / "GameCenter" / "GameCenter.exe"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+    archeage.mkdir(parents=True)
+    (tanks / "game_info.xml").write_text("<p><game><version_name>1.46.0.8501</version_name></game></p>")
+    reg = DictRegistry({
+        # Lesta Game Center in its own folder: only its uninstaller and the lgc:// link know where.
+        rf"{UNINSTALL}\Lesta Game Center": {"DisplayName": "Lesta Game Center", "Publisher": "Lesta Games",
+                                             "UninstallString": f'"{lgc_dir / "setup.exe"}" /IU'},
+        r"HKCR\lgc\shell\open\command": {"": f'"{lgc_dir / "lgc.exe"}" "%1"'},
+        rf"{UNINSTALL}\LGC-254147373": {"DisplayName": "Мир танков", "Publisher": "Lesta Games",
+                                         "InstallLocation": str(tanks),
+                                         "UninstallString": f'"{tanks / "lgc_api.exe"}" --uninstall'},
+        # "Battlestate" contains the letters "lesta".
+        rf"{UNINSTALL}\EscapeFromTarkov": {"DisplayName": "Escape from Tarkov", "Publisher": "Battlestate Games",
+                                            "InstallLocation": str(eft), "UninstallString": str(eft / "Uninstall.exe")},
+        # VALORANT was deleted, its entry stayed; Riot Client is gone too.
+        rf"{UNINSTALL}\Riot Game valorant.live": {
+            "DisplayName": "VALORANT", "Publisher": "Riot Games, Inc",
+            "InstallLocation": str(tmp_path / "D" / "Riot Games" / "VALORANT" / "live"),
+            "UninstallString": f'"{tmp_path / "C" / "Riot Client" / "RiotClientServices.exe"}" --uninstall-product=valorant'},
+        # VK Play: its link handler uses %LOCALAPPDATA%, its games are gcgame_<id>.
+        r"HKCR\vkplay\shell\open\command": {"": '"%LOCALAPPDATA%/GameCenter/GameCenter.exe" "%1"'},
+        rf"{UNINSTALL}\GameCenter": {"DisplayName": "VK Play Игровой центр", "Publisher": "ООО «ВК»",
+                                      "InstallLocation": str(local / "GameCenter")},
+        rf"{UNINSTALL}\gcgame_0.3001": {"DisplayName": "ArcheAge", "Publisher": "Astrum Entertainment",
+                                         "InstallLocation": str(archeage), "DisplayVersion": "1.691",
+                                         "UninstallString": "rundll32 url.dll,FileProtocolHandler vkplay://uninstall/0.3001"},
+    })
+    ctx = SystemContext(registry=reg, env={"LOCALAPPDATA": str(local)}, drives=[])
+    scans = {s.launcher_id: s for s in run_scan(ctx).scans}
+
+    lesta = scans["lesta"]
+    assert lesta.exe_path == str(lgc_dir / "lgc.exe")
+    assert [(g.name, g.version) for g in lesta.games] == [("Мир танков", "1.46.0.8501")]
+
+    riot = scans["riot"]
+    assert not riot.installed and not riot.games
+    assert any("VALORANT" in note and "папки нет" in note for note in riot.notes)
+
+    vk = scans["vkplay"]
+    assert vk.exe_path == str(local / "GameCenter" / "GameCenter.exe")
+    assert [(g.name, g.game_id, g.version) for g in vk.games] == [("ArcheAge", "gcgame_0.3001", "1.691")]

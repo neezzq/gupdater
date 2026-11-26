@@ -263,10 +263,37 @@ def test_stuck_update_is_nudged_then_finishes(tmp_path):
     pilot = make_pilot([launcher], system)
     run = pilot.run()[0]
 
-    assert state["nudged_at"] == 240  # warm-up (180 s) + stuck for 60 s
-    assert "nudge Dota 2" in "\n".join(pilot.log_lines)
+    assert state["nudged_at"] == 120  # start-up (60 s) + stuck for 60 s
+    log = "\n".join(pilot.log_lines)
+    assert "ждут обновления: Dota 2" in log and "nudge Dota 2" in log
     assert run.outcome is Outcome.UPDATED
-    assert 430 + 180 <= system.t < 430 + 180 + 40  # last busy poll + quiet period + closing
+    assert 310 + 180 <= system.t < 310 + 180 + 40  # last busy poll + quiet period + closing
+
+
+def test_waiting_games_and_the_nudge_countdown_are_shown(tmp_path):
+    system = FakeSystem()
+    launcher = FakeLauncher(tmp_path, system, nudge=True,
+                            progress=lambda: Progress(busy=False, pending=[("570", "Dota 2"), ("271590", "GTA V")]))
+    system.on_start[str(launcher.exe)] = downloads_on_start("fake.exe", [])
+    phases = []
+    make_pilot([launcher], system, on_update=lambda run: phases.append(run.phase)).run()
+    assert "Ждут обновления: Dota 2, GTA V · жду, начнёт ли лаунчер сам" in phases
+    assert any(p.startswith("Ждут обновления: Dota 2, GTA V · если не начнёт сам, через") for p in phases)
+
+
+def test_launcher_without_games_is_skipped(tmp_path):
+    system = FakeSystem()
+    launcher = FakeLauncher(tmp_path, system)
+    launcher._scan_orig = launcher._scan
+
+    def no_games(ctx, result):
+        launcher._scan_orig(ctx, result)
+        result.games.clear()
+
+    launcher._scan = no_games
+    run = make_pilot([launcher], system).run()[0]
+    assert (run.outcome, run.message) == (Outcome.SKIPPED, "игр не найдено")
+    assert system.started == []
 
 
 def test_logged_out_launcher_fails_after_warmup(tmp_path):
