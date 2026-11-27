@@ -29,6 +29,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
                         help="обновить игры и закрыться (так запускает планировщик Windows); "
                              "сначала ждёт, пока за компьютером никого нет")
     parser.add_argument("--now", action="store_true", help="вместе с --autopilot: не ждать, начать сразу")
+    parser.add_argument("--agent", action="store_true", help="запуститься свёрнутым и ждать команд пульта клуба")
     parser.add_argument("--demo", action="store_true", help="показать ненастоящие данные (для проверки)")
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--updated-from", metavar="ВЕРСИЯ", help=argparse.SUPPRESS)
@@ -88,7 +89,10 @@ def run_window(runtime, args: argparse.Namespace) -> int:
     app.setApplicationName("GUpdater")
     apply_theme(app)
     window = MainWindow(runtime, load_settings(), updated_from=args.updated_from)
-    window.show()
+    if args.agent:
+        window.showMinimized()
+    else:
+        window.show()
 
     if args.smoke_test:
         # Used by the build check: the window must open, scan and close by itself.

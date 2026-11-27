@@ -35,7 +35,7 @@ def test_window_shows_version_tabs_and_scan(demo_window):
 
     app, window = demo_window
     assert __version__ in window.windowTitle()
-    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == ["Обновление", "Входы", "Игры", "Настройки"]
+    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == ["Обновление", "Входы", "Игры", "Клуб", "Настройки"]
     tree = window.games.tree
     assert tree.topLevelItemCount() == 8
     assert tree.topLevelItem(0).text(0) == "Steam"
@@ -122,3 +122,31 @@ def test_single_launcher_run(demo_window):
     assert "только Epic Games" in log
     assert "Epic Games: запускаю" in log and "Steam:" not in log
     assert tab.rows["epic"].state.text() == "Обновлять нечего"
+
+
+def test_club_console_updates_a_pc(demo_window):
+    """Stage 4: the console finds a PC by address, sees it free and starts its update."""
+    from gupdater.club.agent import Agent
+
+    app, window = demo_window
+    window.settings.club_key = "club-key"
+    agent = Agent(key=lambda: "club-key", status=window.agent_status,
+                  on_run=lambda now: window.agent_requests.emit("run", now),
+                  on_stop=lambda: window.agent_requests.emit("stop", False),
+                  port=0, discovery_port=0, host="127.0.0.1")
+    agent.start()
+    try:
+        club = window.club
+        address = f"127.0.0.1:{agent.port}"
+        club.add(address)
+        _wait(app, club._jobs[-1].finished, 10_000)
+        assert club.rows[address].state.text() == "Свободен"  # no mouse/keyboard data off Windows
+        club.command(address, now=True)
+        _wait(app, window.autopilot.run_finished)
+        assert "Готово" in window.autopilot.log.toPlainText()
+        club.refresh()
+        _wait(app, club._jobs[-1].finished, 10_000)
+        assert "последний запуск" in club.rows[address].subtitle.text()
+    finally:
+        agent.stop()
+        window.club.shutdown()

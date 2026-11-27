@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QSpinBox,
@@ -22,7 +23,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import secrets
+
 from gupdater.autopilot import scheduler
+from gupdater.club import autostart
 from gupdater.autopilot.system import start_detached
 from gupdater.selfupdate import running_exe
 from gupdater.settings import Settings, logins_dir, reports_dir, save_settings
@@ -118,6 +122,36 @@ class SettingsTab(QWidget):
         program_box = QGroupBox("Программа")
         program_box.setLayout(program)
 
+        self.key = QLineEdit(s.club_key)
+        self.key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key.setPlaceholderText("одинаковый на всех ПК клуба")
+        self.key.textChanged.connect(self._save)
+        show = QPushButton("Показать")
+        show.setCheckable(True)
+        show.toggled.connect(lambda on: self.key.setEchoMode(
+            QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password))
+        new_key = QPushButton("Создать")
+        new_key.setToolTip("Придумать надёжный ключ; потом введите его на всех ПК клуба")
+        new_key.clicked.connect(lambda: (self.key.setText(secrets.token_urlsafe(12)), show.setChecked(True)))
+        key_row = QHBoxLayout()
+        key_row.addWidget(self.key, 1)
+        key_row.addWidget(show)
+        key_row.addWidget(new_key)
+        self.agent = QCheckBox("Этот ПК принимает команды с пульта")
+        self.agent.setToolTip("Включите на игровых ПК. Нужен тот же ключ клуба, что и на ПК администратора.")
+        self.agent.setChecked(s.agent_enabled)
+        self.autostart = QCheckBox("Запускать GUpdater свёрнутым при входе в Windows")
+        self.autostart.setChecked(s.agent_autostart)
+        self.autostart.toggled.connect(self._apply_autostart)
+        self.agent.toggled.connect(lambda _: self._status("Перезапустите GUpdater, чтобы включить или выключить приём команд"))
+        net = QFormLayout()
+        net.setVerticalSpacing(10)
+        net.addRow("Ключ клуба", key_row)
+        net.addRow(self.agent)
+        net.addRow(self.autostart)
+        net_box = QGroupBox("Сеть клуба")
+        net_box.setLayout(net)
+
         columns = QHBoxLayout()
         columns.setSpacing(14)
         left = QVBoxLayout()
@@ -126,6 +160,7 @@ class SettingsTab(QWidget):
         left.addStretch(1)
         right = QVBoxLayout()
         right.addWidget(schedule_box)
+        right.addWidget(net_box)
         right.addStretch(1)
         columns.addLayout(left, 1)
         columns.addLayout(right, 1)
@@ -135,7 +170,7 @@ class SettingsTab(QWidget):
 
         for spin in (self.warmup, self.quiet, self.max_time, self.idle, self.wait_free):
             spin.valueChanged.connect(self._save)
-        for box in (self.close_after, self.steam_nudge, self.check_app, self.schedule_on):
+        for box in (self.close_after, self.steam_nudge, self.check_app, self.schedule_on, self.agent):
             box.toggled.connect(self._save)
         self.schedule_time.timeChanged.connect(self._save)
 
@@ -158,10 +193,23 @@ class SettingsTab(QWidget):
         s.schedule_time = self.schedule_time.time().toString("HH:mm")
         s.idle_minutes = self.idle.value()
         s.wait_free_hours = self.wait_free.value()
+        s.club_key = self.key.text().strip()
+        s.agent_enabled = self.agent.isChecked()
         try:
             save_settings(s)
         except OSError as exc:
             self._status(f"Не удалось сохранить настройки: {exc}")
+
+    def _apply_autostart(self, on: bool) -> None:
+        self.settings.agent_autostart = on
+        self._save()
+        exe = running_exe()
+        if exe is None or self._runtime.demo:
+            return
+        try:
+            autostart.set_enabled(self._runtime.registry_factory(), exe, on)
+        except OSError as exc:
+            self._status(f"Не удалось настроить автозапуск: {exc}")
 
     def open_demo(self) -> None:
         exe = running_exe()
@@ -173,7 +221,15 @@ class SettingsTab(QWidget):
     def _heal_schedule(self) -> None:
         """A frozen system disk forgets the scheduled task on reboot: put it back."""
         exe = running_exe()
-        if self._runtime.demo or exe is None or not self.settings.schedule_enabled:
+        if self._runtime.demo or exe is None:
+            return
+        try:
+            registry = self._runtime.registry_factory()
+            if self.settings.agent_autostart and not autostart.is_enabled(registry, exe):
+                autostart.set_enabled(registry, exe, True)  # a disk rollback removed it
+        except OSError:
+            pass
+        if not self.settings.schedule_enabled:
             return
         try:
             if not scheduler.task_exists():

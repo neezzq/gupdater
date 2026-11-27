@@ -106,6 +106,8 @@ class AutopilotTab(QWidget):
         self._quit_after = False
         self._scan: dict[str, tuple[bool, int, str | None]] = {}  # id -> (installed, games, exe)
         self.rows: dict[str, LauncherRow] = {}
+        self.current = ""       # what the autopilot is doing now, for the club console
+        self.last_summary = ""
 
         self.start_button = QPushButton("Обновить всё")
         self.start_button.setObjectName("Primary")
@@ -294,6 +296,7 @@ class AutopilotTab(QWidget):
         row = self.rows.get(run.launcher_id)
         if row is None:
             return
+        self.current = f"{_LAUNCHERS[run.launcher_id].name}: {run.phase}"
         color = OUTCOME_COLORS.get(run.outcome, BLUE) if run.outcome else BLUE
         text = run.outcome.text if run.outcome else run.phase
         tooltip = "\n".join([run.phase, *run.changes, *run.warnings])
@@ -304,6 +307,8 @@ class AutopilotTab(QWidget):
             self._lock.unlock()
             self._lock = None
         self._append(f"Готово: {summary}")
+        self.current = ""
+        self.last_summary = summary
         self.start_button.setText("Обновить всё")
         self.start_button.setObjectName("Primary")
         self.start_button.setEnabled(True)

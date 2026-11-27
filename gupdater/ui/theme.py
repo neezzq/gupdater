@@ -86,6 +86,9 @@ QCheckBox::indicator:hover, QTableView::indicator:hover { border-color: rgba(255
 QCheckBox::indicator:checked, QTableView::indicator:checked { background: %(accent)s; border-color: %(accent)s;
     image: url(%(check)s); }
 
+QLineEdit { background: rgba(255,255,255,18); border: 1px solid rgba(255,255,255,31); border-radius: 10px;
+            padding: 6px 10px; selection-background-color: %(accent)s; }
+QLineEdit:focus { border-color: rgba(10,132,255,200); }
 QSpinBox, QTimeEdit { background: rgba(255,255,255,18); border: 1px solid rgba(255,255,255,31); border-radius: 10px;
                       padding: 4px 8px; min-height: 22px; selection-background-color: %(accent)s; }
 QSpinBox:focus, QTimeEdit:focus { border-color: rgba(10,132,255,200); }

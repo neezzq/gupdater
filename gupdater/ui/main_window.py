@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
@@ -27,6 +29,7 @@ from gupdater.ui.autopilot_tab import AutopilotTab
 from gupdater.ui.games_tab import GamesTab
 from gupdater.ui.logins_tab import LoginsTab, recover_logins
 from gupdater.ui.runtime import Runtime
+from gupdater.ui.club_tab import ClubTab
 from gupdater.ui.settings_tab import SettingsTab
 from gupdater.ui.style import GREEN, MUTED, RED
 from gupdater.ui.theme import Backdrop, dark_title_bar, logo_pixmap
@@ -64,6 +67,7 @@ class DownloadThread(QThread):
 
 class MainWindow(QMainWindow):
     scan_finished = Signal()
+    agent_requests = Signal(str, bool)  # ("run", now) / ("stop", False), from the agent's thread
 
     def __init__(self, runtime: Runtime, settings: Settings, updated_from: str | None = None) -> None:
         super().__init__()
@@ -107,7 +111,9 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self.autopilot, "Обновление")
         self.tabs.addTab(self.logins, "Входы")
+        self.club = ClubTab(settings, self._show_status)
         self.tabs.addTab(self.games, "Игры")
+        self.tabs.addTab(self.club, "Клуб")
         self.tabs.addTab(self.settings_tab, "Настройки")
         self.games.scanned.connect(self.autopilot.set_scan)
         self.games.scanned.connect(self.logins.set_scan)
@@ -125,6 +131,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         # If GUpdater died mid-update, the club's login may still be in a launcher.
+        self.agent = None
+        self.agent_requests.connect(self._agent_command)
+        if settings.agent_enabled and settings.club_key and not runtime.demo:
+            self._start_agent()
+
         if recover_logins(runtime, settings, self._show_status):
             self._show_status("Прошлое обновление прервалось: вход клуба убран из лаунчеров, всё как было")
 
@@ -230,6 +241,48 @@ class MainWindow(QMainWindow):
 
     # --- closing ------------------------------------------------------------
 
+    # --- the club console talks to this PC ------------------------------------
+
+    def _start_agent(self) -> None:
+        from gupdater.club.agent import Agent
+
+        self.agent = Agent(
+            key=lambda: self.settings.club_key,
+            status=self.agent_status,
+            on_run=lambda now: self.agent_requests.emit("run", now),
+            on_stop=lambda: self.agent_requests.emit("stop", False),
+        )
+        try:
+            self.agent.start()
+            self._show_status(f"Пульт клуба может управлять этим ПК (порт {self.agent.port})")
+        except OSError as exc:
+            self.agent = None
+            self._show_status(f"Не удалось включить приём команд: {exc}")
+
+    def agent_status(self) -> dict:
+        """Called from the agent's thread: only reads simple values."""
+        import socket
+
+        system = self.runtime.system_factory()
+        idle = system.idle_seconds()
+        running = self.autopilot.is_running
+        report = self.autopilot.last_run.text()
+        return {
+            "name": os.environ.get("COMPUTERNAME") or socket.gethostname(),
+            "version": __version__,
+            "idle_seconds": idle,
+            "free": not running and (idle is None or idle >= self.settings.idle_minutes * 60),
+            "running": running,
+            "current": self.autopilot.current,
+            "last": self.autopilot.last_summary or report.removeprefix("Последний запуск ").strip(),
+        }
+
+    def _agent_command(self, command: str, now: bool) -> None:
+        if command == "run":
+            self.autopilot.start(scheduled=not now)
+        else:
+            self.autopilot.stop()
+
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.autopilot.is_running:
             answer = QMessageBox.question(self, "Автопилот работает", "Автопилот ещё работает. Остановить его и закрыть?")
@@ -238,4 +291,7 @@ class MainWindow(QMainWindow):
                 return
             self.autopilot.stop()
             self.autopilot.wait_finished(15_000)
+        self.club.shutdown()
+        if self.agent:
+            self.agent.stop()
         event.accept()

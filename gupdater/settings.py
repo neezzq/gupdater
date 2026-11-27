@@ -38,6 +38,11 @@ class Settings:
     check_app_updates: bool = True
     # Stage 3: put the club's saved login in for the update, then take it out again.
     use_club_logins: bool = True
+    # Stage 4: the club network.
+    club_key: str = ""             # shared by all club PCs; signs the console's commands
+    agent_enabled: bool = False    # this PC accepts commands from the console
+    agent_autostart: bool = False  # start GUpdater minimised when Windows signs in
+    club_hosts: list[str] = field(default_factory=list)  # PCs added by hand (IP or IP:port)
 
     def ordered_ids(self) -> list[str]:
         """Saved order, without unknown ids, plus launchers added in newer versions."""
