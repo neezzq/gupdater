@@ -22,3 +22,11 @@ def environment_warning(result: ScanResult, demo: bool) -> str:
         text += (f" Сейчас настройки и входы GUpdater лежат на системном диске ({folder}) и пропадут при "
                  "откате — переложите GUpdater.exe на диск с играми.")
     return text
+
+
+def short_warning(result: ScanResult) -> str:
+    """One line for the banner; the full advice goes into its tooltip."""
+    names = result.inventory.disk_freeze
+    if not names:
+        return ""
+    return f"{', '.join(names)}: настройте входы и расписание при выключенной защите диска."

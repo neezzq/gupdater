@@ -6,7 +6,17 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPalette, QPixmap, QRadialGradient
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPalette,
+    QPixmap,
+    QRadialGradient,
+)
 from PySide6.QtWidgets import QApplication, QWidget
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
@@ -20,7 +30,16 @@ _QSS = """
 * { color: %(text)s; }
 QToolTip { background: #2A2D33; color: %(text)s; border: 1px solid rgba(255,255,255,40); border-radius: 8px; padding: 6px; }
 QLabel#Muted { color: %(text2)s; }
-QLabel#Title { font-size: 20pt; font-weight: 700; }
+QLabel#Title { font-size: 21pt; font-weight: 800; }
+QLabel#Section { font-weight: 700; color: #C9CDD4; }
+QListWidget#Cards { background: transparent; border: none; outline: none; }
+QListWidget#Cards::item { background: transparent; border: none; }
+QListWidget#Cards::item:selected, QListWidget#Cards::item:hover { background: transparent; }
+QFrame#Row { background: rgba(255,255,255,14); border: 1px solid rgba(255,255,255,24); border-radius: 16px; }
+QFrame#Row:hover { background: rgba(255,255,255,22); border-color: rgba(255,255,255,40); }
+QFrame#Row QLabel { background: transparent; }
+QPushButton#Round { border-radius: 16px; min-width: 32px; max-width: 32px; min-height: 32px; max-height: 32px;
+                    padding: 0; font-size: 11pt; }
 QLabel#Warning { background: rgba(255,159,10,28); border: 1px solid rgba(255,159,10,96); border-radius: 12px;
                  padding: 8px 12px; color: #FFD9A0; }
 QLabel#Chip { background: rgba(255,255,255,20); border: 1px solid rgba(255,255,255,31); border-radius: 10px;
@@ -31,7 +50,7 @@ QGroupBox { background: rgba(255,255,255,14); border: 1px solid rgba(255,255,255
 QGroupBox::title { subcontrol-origin: margin; left: 14px; top: 2px; padding: 0 4px; color: #C9CDD4; }
 QFrame#Glass { background: rgba(255,255,255,14); border: 1px solid rgba(255,255,255,26); border-radius: 16px; }
 
-QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255,255,255,42), stop:1 rgba(255,255,255,18));
+QPushButton { font-weight: 600; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255,255,255,42), stop:1 rgba(255,255,255,18));
               border: 1px solid rgba(255,255,255,42); border-radius: 12px; padding: 7px 16px; }
 QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(255,255,255,60), stop:1 rgba(255,255,255,26));
                     border-color: rgba(255,255,255,64); }
@@ -45,7 +64,7 @@ QPushButton#Accent { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 
                      border: 1px solid rgba(120,180,255,160); font-weight: 600; color: #FFFFFF; }
 
 QTabWidget::pane { border: none; top: 8px; }
-QTabBar::tab { background: transparent; color: %(text2)s; padding: 7px 18px; margin-right: 6px;
+QTabBar::tab { background: transparent; color: %(text2)s; padding: 8px 20px; margin-right: 6px; font-weight: 700;
                border-radius: 12px; border: 1px solid transparent; }
 QTabBar::tab:selected { background: rgba(255,255,255,32); color: #FFFFFF; border: 1px solid rgba(255,255,255,42); }
 QTabBar::tab:hover:!selected { color: #D8DBE0; background: rgba(255,255,255,12); }
@@ -116,15 +135,26 @@ def apply_theme(app: QApplication) -> None:
         palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(TEXT_3))
     app.setPalette(palette)
 
-    font = QFont("Segoe UI" if sys.platform == "win32" else app.font().family())
+    family = load_fonts()
+    font = QFont(family or ("Segoe UI" if sys.platform == "win32" else app.font().family()))
     font.setPointSizeF(10)
+    font.setWeight(QFont.Weight.Medium)
     app.setFont(font)
-    check = (ASSETS / "check.svg").as_posix()
     app.setStyleSheet(_QSS % {
-        "text": TEXT, "text2": TEXT_2, "accent": ACCENT, "check": check,
-        "up": (ASSETS / "arrow-up.svg").as_posix(), "down": (ASSETS / "arrow-down.svg").as_posix(),
+        "text": TEXT, "text2": TEXT_2, "accent": ACCENT, "check": (ASSETS / "check.png").as_posix(),
+        "up": (ASSETS / "arrow-up.png").as_posix(), "down": (ASSETS / "arrow-down.png").as_posix(),
     })
     app.setWindowIcon(app_icon())
+
+
+def load_fonts() -> str | None:
+    """Inter (SIL Open Font License), shipped in assets/fonts; returns its family name."""
+    family = None
+    for path in sorted((ASSETS / "fonts").glob("*.ttf")):
+        font_id = QFontDatabase.addApplicationFont(str(path))
+        families = QFontDatabase.applicationFontFamilies(font_id) if font_id >= 0 else []
+        family = family or (families[0] if families else None)
+    return family
 
 
 def app_icon() -> QIcon:

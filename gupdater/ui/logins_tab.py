@@ -7,19 +7,17 @@ import traceback
 from typing import Callable
 
 from PySide6.QtCore import QSize, Qt, QThread, Signal
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QDialog,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -34,9 +32,10 @@ from gupdater.report import ScanResult
 from gupdater.settings import Settings, logins_dir, save_settings
 from gupdater.ui.runtime import Runtime
 from gupdater.ui.icons import launcher_icon
-from gupdater.ui.style import GREEN, MUTED
+from gupdater.ui.launcher_row import LauncherRow
+from gupdater.ui.style import GREEN
 from gupdater.ui.theme import dark_title_bar
-from gupdater.ui.warnings import environment_warning
+from gupdater.ui.warnings import environment_warning, short_warning
 
 _BY_ID = {launcher.id: launcher for launcher in ALL_LAUNCHERS}
 _KNOWN = {"steam", "epic", "riot", "battlenet"}
@@ -233,45 +232,39 @@ class LoginsTab(QWidget):
         self._status = status
         self._installed: dict[str, bool] = {}
         self._exe: dict[str, str | None] = {}
+        self.rows: dict[str, LauncherRow] = {}
 
-        intro = QLabel(
-            "Игроки сидят в лаунчерах под своими аккаунтами. GUpdater подставляет вход клуба только на время "
-            "обновления и потом возвращает лаунчер в прежнее состояние, так что игры обновляются, даже если после "
-            "перезагрузки все вышли из аккаунтов. Вход хранится рядом с GUpdater, зашифрованный ключом этого "
-            "компьютера: на другом ПК файл бесполезен."
-        )
-        intro.setWordWrap(True)
-        intro.setObjectName("Muted")
         self.use = QCheckBox("Подставлять вход клуба при обновлении")
         self.use.setChecked(settings.use_club_logins)
+        self.use.setToolTip(
+            "Игроки сидят под своими аккаунтами. GUpdater подставляет вход клуба только на время обновления\n"
+            "и потом возвращает лаунчер как было — даже если после перезагрузки все вышли из аккаунтов.\n"
+            "Вход хранится рядом с GUpdater, зашифрованный ключом этого компьютера."
+        )
         self.use.toggled.connect(self._toggle_use)
+        hint = QLabel("Только на время обновления — игроки вход клуба не видят.")
+        hint.setObjectName("Muted")
+        top = QHBoxLayout()
+        top.addWidget(self.use)
+        top.addSpacing(12)
+        top.addWidget(hint, 1)
+
         self.warning = QLabel()
         self.warning.setObjectName("Warning")
         self.warning.setWordWrap(True)
         self.warning.hide()
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Лаунчер", "Вход клуба", "Как ищется", ""])
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(46)
-        self.table.setIconSize(QSize(24, 24))
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(3, 330)
+        self.list = QListWidget()
+        self.list.setObjectName("Cards")
+        self.list.setSpacing(3)
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(10)
-        layout.addWidget(intro)
-        layout.addWidget(self.use)
+        layout.addLayout(top)
         layout.addWidget(self.warning)
-        layout.addWidget(self.table, 1)
+        layout.addWidget(self.list, 1)
         self.refresh()
 
     def _toggle_use(self, on: bool) -> None:
@@ -282,52 +275,46 @@ class LoginsTab(QWidget):
         self._installed = {scan.launcher_id: scan.installed for scan in result.scans}
         self._exe = {scan.launcher_id: scan.exe_path for scan in result.scans}
         warning = environment_warning(result, self._runtime.demo)
-        self.warning.setText(warning)
+        self.warning.setText(short_warning(result))
+        self.warning.setToolTip(warning)
         self.warning.setVisible(bool(warning))
         self.refresh()
 
     def refresh(self) -> None:
         vault = Vault(logins_dir())
-        ids = self.settings.ordered_ids()
-        self.table.setRowCount(len(ids))
-        for row, launcher_id in enumerate(ids):
+        self.list.clear()
+        self.rows.clear()
+        for launcher_id in self.settings.ordered_ids():
             launcher = _BY_ID[launcher_id]
             installed = self._installed.get(launcher_id, True)
             info = vault.info(launcher_id)
-            self.table.setItem(row, 0, QTableWidgetItem(launcher_icon(launcher_id, self._exe.get(launcher_id)), launcher.name))
-            if info:
-                saved = time.strftime("%d.%m.%Y %H:%M", time.localtime(info.get("saved_at", 0)))
-                text = f"Запомнен {saved}"
-                if info.get("refreshed_at"):
-                    text += time.strftime(" · обновлён %d.%m %H:%M", time.localtime(info["refreshed_at"]))
-                color = GREEN
-            else:
-                text, color = ("Не запомнен" if installed else "Лаунчер не найден"), MUTED
-            state = QTableWidgetItem(text)
-            state.setForeground(QColor(color))
-            self.table.setItem(row, 1, state)
-            how = QTableWidgetItem("известно где" if launcher_id in _KNOWN else "найдёт мастер")
-            how.setForeground(QColor(MUTED))
-            how.setToolTip(
-                "Где этот лаунчер хранит вход, известно заранее." if launcher_id in _KNOWN else
-                "Мастер сравнит папки лаунчера до и после входа и запомнит то, что изменилось."
-            )
-            self.table.setItem(row, 2, how)
-
-            cell = QWidget()
-            buttons = QHBoxLayout(cell)
-            buttons.setContentsMargins(4, 4, 4, 4)
-            remember = QPushButton("Запомнить вход…" if not info else "Запомнить заново…")
-            remember.setMinimumWidth(190)
+            remember = QPushButton("Запомнить заново" if info else "Запомнить")
+            remember.setObjectName("" if info else "Primary")
             # In the demo only Steam pretends to sign in.
             remember.setEnabled(installed and (not self._runtime.demo or launcher_id == "steam"))
             remember.clicked.connect(lambda _=False, lid=launcher_id: self.remember(lid))
             forget = QPushButton("Забыть")
-            forget.setEnabled(bool(info))
+            forget.setVisible(bool(info))
             forget.clicked.connect(lambda _=False, lid=launcher_id: self.forget(lid))
-            buttons.addWidget(remember)
-            buttons.addWidget(forget)
-            self.table.setCellWidget(row, 3, cell)
+            row = LauncherRow(launcher_id, launcher.name, launcher_icon(launcher_id, self._exe.get(launcher_id)),
+                              buttons=[forget, remember])
+            if info:
+                saved = time.strftime("%d.%m в %H:%M", time.localtime(info.get("saved_at", 0)))
+                row.set_subtitle(f"запомнен {saved}")
+                row.set_state("Готов", GREEN)
+            elif installed:
+                row.set_subtitle("вход клуба не запомнен")
+            else:
+                row.set_subtitle("не найден на этом ПК")
+            row.state.setToolTip(
+                "Где лаунчер хранит вход, известно заранее" if launcher_id in _KNOWN
+                else "Мастер сам найдёт, где лаунчер хранит вход"
+            )
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(0, 58))
+            self.list.addItem(item)
+            self.list.setItemWidget(item, row)
+            self.rows[launcher_id] = row
 
     def remember(self, launcher_id: str) -> None:
         dialog = LoginWizardDialog(_BY_ID[launcher_id], self._runtime, self)
@@ -336,9 +323,8 @@ class LoginsTab(QWidget):
 
     def forget(self, launcher_id: str) -> None:
         name = _BY_ID[launcher_id].name
-        answer = QMessageBox.question(self, "Забыть вход", f"Забыть сохранённый вход клуба для {name}?")
+        answer = QMessageBox.question(self, "Забыть вход", f"Забыть вход клуба для {name}?")
         if answer == QMessageBox.StandardButton.Yes:
             Vault(logins_dir()).forget(launcher_id)
             self._status(f"Вход клуба для {name} забыт")
             self.refresh()
-

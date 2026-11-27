@@ -27,6 +27,7 @@ from gupdater.ui.autopilot_tab import AutopilotTab
 from gupdater.ui.games_tab import GamesTab
 from gupdater.ui.logins_tab import LoginsTab, recover_logins
 from gupdater.ui.runtime import Runtime
+from gupdater.ui.settings_tab import SettingsTab
 from gupdater.ui.style import GREEN, MUTED, RED
 from gupdater.ui.theme import Backdrop, dark_title_bar, logo_pixmap
 
@@ -85,7 +86,7 @@ class MainWindow(QMainWindow):
         demo.setObjectName("Chip")
         demo.setVisible(runtime.demo)
         self.update_status = QLabel()
-        self.update_button = QPushButton("Проверить обновления программы")
+        self.update_button = QPushButton("Проверить обновления")
         self.update_button.clicked.connect(self._on_update_button)
 
         header = QHBoxLayout()
@@ -102,10 +103,12 @@ class MainWindow(QMainWindow):
         self.games = GamesTab(runtime, self._show_status)
         self.autopilot = AutopilotTab(runtime, settings, self._show_status)
         self.logins = LoginsTab(runtime, settings, self._show_status)
+        self.settings_tab = SettingsTab(runtime, settings, self._show_status)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self.autopilot, "Автопилот")
+        self.tabs.addTab(self.autopilot, "Обновление")
         self.tabs.addTab(self.logins, "Входы")
-        self.tabs.addTab(self.games, "Игры на этом ПК")
+        self.tabs.addTab(self.games, "Игры")
+        self.tabs.addTab(self.settings_tab, "Настройки")
         self.games.scanned.connect(self.autopilot.set_scan)
         self.games.scanned.connect(self.logins.set_scan)
         self.games.scan_finished.connect(self.scan_finished)
@@ -177,7 +180,7 @@ class MainWindow(QMainWindow):
             self.update_button.setStyleSheet("font-weight: bold;")
         else:
             self._set_update_status("У вас последняя версия")
-            self.update_button.setText("Проверить обновления программы")
+            self.update_button.setText("Проверить обновления")
             self.update_button.setStyleSheet("")
 
     def install_update(self, release: selfupdate.Release) -> None:

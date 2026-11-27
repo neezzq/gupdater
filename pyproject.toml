@@ -26,7 +26,7 @@ version = { attr = "gupdater.__version__" }
 include = ["gupdater*"]
 
 [tool.setuptools.package-data]
-gupdater = ["assets/*"]
+gupdater = ["assets/*", "assets/*/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

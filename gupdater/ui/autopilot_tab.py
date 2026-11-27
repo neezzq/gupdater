@@ -1,4 +1,4 @@
-"""Tab "Автопилот": the launcher queue, its settings, the schedule and the log."""
+"""Tab "Обновление": the launcher queue, the big button and the log."""
 
 from __future__ import annotations
 
@@ -6,39 +6,31 @@ import threading
 import traceback
 from dataclasses import replace
 
-from PySide6.QtCore import QLockFile, QSize, Qt, QThread, QTime, QTimer, QUrl, Signal
-from PySide6.QtGui import QBrush, QColor, QDesktopServices
+from PySide6.QtCore import QLockFile, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QCheckBox,
-    QFormLayout,
-    QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
-    QMessageBox,
+    QListWidget,
+    QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
-    QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
-    QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from gupdater.autopilot import scheduler
-from gupdater.autopilot.engine import Autopilot, EngineSettings, LauncherRun, Outcome, Stopped
+from gupdater.autopilot.engine import Autopilot, EngineSettings, LauncherRun, Stopped
 from gupdater.autopilot.report import build_run_report, latest_report, save_run_report, summary_line
 from gupdater.launchers import ALL_LAUNCHERS
 from gupdater.report import ScanResult, sanitize, scan_all
-from gupdater.selfupdate import running_exe
 from gupdater.settings import Settings, data_dir, reports_dir, save_settings
-from gupdater.ui.runtime import Runtime
 from gupdater.ui.icons import launcher_icon
-from gupdater.ui.style import BLUE, MUTED, OUTCOME_COLORS
-from gupdater.ui.warnings import environment_warning
+from gupdater.ui.launcher_row import LauncherRow, games_text
+from gupdater.ui.runtime import Runtime
+from gupdater.ui.style import BLUE, OUTCOME_COLORS
+from gupdater.ui.warnings import environment_warning, short_warning
 
 _LAUNCHERS = {launcher.id: launcher for launcher in ALL_LAUNCHERS}
 
@@ -48,11 +40,12 @@ class AutopilotThread(QThread):
     log_line = Signal(str)
     done = Signal(object, str, str)  # runs, report path, summary
 
-    def __init__(self, runtime: Runtime, settings: Settings, scheduled: bool) -> None:
+    def __init__(self, runtime: Runtime, settings: Settings, scheduled: bool, only: str | None = None) -> None:
         super().__init__()
         self._runtime = runtime
         self._settings = settings
         self._scheduled = scheduled
+        self._only = only
         self.stop_event = threading.Event()
 
     def run(self) -> None:
@@ -68,8 +61,9 @@ class AutopilotThread(QThread):
 
         recover_logins(runtime, settings, self.log_line.emit)
         system = runtime.system_factory()
+        ids = [self._only] if self._only else settings.ordered_ids()
         pilot = Autopilot(
-            [_LAUNCHERS[i] for i in settings.ordered_ids()],
+            [_LAUNCHERS[i] for i in ids],
             runtime.context_factory,
             system,
             EngineSettings.from_settings(settings),
@@ -92,7 +86,7 @@ class AutopilotThread(QThread):
                 note = note or "компьютер был занят"
                 pilot.skip_all(note)
         if not note:
-            pilot.run(enabled=settings.is_enabled)
+            pilot.run(enabled=(lambda launcher_id: True) if self._only else settings.is_enabled)
         text = build_run_report(pilot.runs, pilot.log_lines, started, system.wall_time(), ctx.computer_name, note)
         path = save_run_report(sanitize(text, ctx), reports_dir(), started)
         self.done.emit(pilot.runs, str(path), summary_line(pilot.runs))
@@ -110,315 +104,129 @@ class AutopilotTab(QWidget):
         self._thread: AutopilotThread | None = None
         self._lock: QLockFile | None = None
         self._quit_after = False
-        self._found: dict[str, str] = {}
-        self._exe: dict[str, str | None] = {}
-        self._loading = False
+        self._scan: dict[str, tuple[bool, int, str | None]] = {}  # id -> (installed, games, exe)
+        self.rows: dict[str, LauncherRow] = {}
 
-        intro = QLabel(
-            "Автопилот по очереди открывает лаунчеры, ждёт, пока каждый скачает обновления, и закрывает его. "
-            "Перед этим войдите в лаунчеры и включите в них автообновление игр."
-        )
-        intro.setWordWrap(True)
-        intro.setObjectName("Muted")
-
-        self.start_button = QPushButton("▶  Запустить сейчас")
+        self.start_button = QPushButton("Обновить всё")
         self.start_button.setObjectName("Primary")
-        self.stop_button = QPushButton("■  Остановить")
-        self.open_report_button = QPushButton("Открыть последний отчёт")
-        self.open_folder_button = QPushButton("Папка с отчётами")
-        self.start_button.clicked.connect(lambda: self.start())
-        self.stop_button.clicked.connect(self.stop)
-        self.open_report_button.clicked.connect(self.open_last_report)
-        self.open_folder_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(reports_dir()))))
-        self.stop_button.setEnabled(False)
+        self.start_button.setMinimumWidth(170)
+        self.start_button.setToolTip(
+            "По очереди открывает лаунчеры, ждёт, пока каждый скачает обновления, и закрывает его.\n"
+            "Лаунчер без обновлений занимает 2–3 мин, Steam — около 1,5 мин. Лаунчеры без игр пропускаются."
+        )
+        self.start_button.clicked.connect(self._toggle)
         self.last_run = QLabel()
+        self.last_run.setObjectName("Muted")
+        self.report_button = QPushButton("Отчёт")
+        self.report_button.clicked.connect(self.open_last_report)
+
+        top = QHBoxLayout()
+        top.addWidget(self.start_button)
+        top.addSpacing(10)
+        top.addWidget(self.last_run, 1)
+        top.addWidget(self.report_button)
+
         self.warning = QLabel()
         self.warning.setObjectName("Warning")
         self.warning.setWordWrap(True)
         self.warning.hide()
-        self.timing_hint = QLabel()
-        self.timing_hint.setWordWrap(True)
-        self.timing_hint.setObjectName("Muted")
 
-        top = QHBoxLayout()
-        for button in (self.start_button, self.stop_button):
-            top.addWidget(button)
-        top.addSpacing(12)
-        top.addWidget(self.last_run, 1)
-        top.addWidget(self.open_report_button)
-        top.addWidget(self.open_folder_button)
+        self.list = QListWidget()
+        self.list.setObjectName("Cards")
+        self.list.setSpacing(3)
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.list.setToolTip("Перетащите лаунчер, чтобы поменять порядок")
+        self.list.model().rowsMoved.connect(lambda *args: QTimer.singleShot(0, self._order_changed))
 
-        # Queue of launchers.
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Лаунчер", "На этом ПК", "Состояние"])
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(36)
-        self.table.setIconSize(QSize(22, 22))
-        self.table.setShowGrid(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.setColumnWidth(0, 210)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.table.itemChanged.connect(self._on_item_changed)
-        self.up_button = QPushButton("↑ Выше")
-        self.down_button = QPushButton("↓ Ниже")
-        self.up_button.clicked.connect(lambda: self._move(-1))
-        self.down_button.clicked.connect(lambda: self._move(1))
-        order_buttons = QHBoxLayout()
-        order_buttons.addWidget(QLabel("Галочка — обновлять. Порядок — кто первый:"))
-        order_buttons.addStretch(1)
-        order_buttons.addWidget(self.up_button)
-        order_buttons.addWidget(self.down_button)
-        queue_box = QGroupBox("Очередь")
-        queue_layout = QVBoxLayout(queue_box)
-        queue_layout.addWidget(self.table)
-        queue_layout.addLayout(order_buttons)
-
-        # Settings.
-        self.warmup = self._spin(30, 900, " с", settings.warmup_seconds, step=15)
-        self.quiet = self._spin(30, 900, " с", settings.quiet_seconds, step=15)
-        self.max_time = self._spin(10, 600, " мин", settings.max_minutes)
-        self.close_after = QCheckBox("Закрывать лаунчер, когда он закончит")
-        self.close_after.setChecked(settings.close_after)
-        self.steam_nudge = QCheckBox("Steam: если игра сама не обновляется — запустить проверку файлов")
-        self.steam_nudge.setChecked(settings.steam_validate_stuck)
-        self.check_app = QCheckBox("Проверять новые версии GUpdater при запуске")
-        self.check_app.setChecked(settings.check_app_updates)
-        form = QFormLayout()
-        form.setVerticalSpacing(10)
-        form.addRow("Ждать начала загрузки:", self.warmup)
-        form.addRow("Закончил, если не качает:", self.quiet)
-        form.addRow("Не дольше на один лаунчер:", self.max_time)
-        form.addRow(self.close_after)
-        form.addRow(self.steam_nudge)
-        form.addRow(self.check_app)
-        settings_box = QGroupBox("Настройки")
-        settings_box.setLayout(form)
-
-        # Schedule.
-        self.schedule_on = QCheckBox("Запускать каждый день в")
-        self.schedule_on.setChecked(settings.schedule_enabled)
-        self.schedule_time = QTimeEdit(QTime.fromString(settings.schedule_time, "HH:mm"))
-        self.schedule_time.setDisplayFormat("HH:mm")
-        self.schedule_time.setMaximumWidth(110)
-        self.idle = self._spin(1, 120, " мин", settings.idle_minutes)
-        self.wait_free = self._spin(1, 24, " ч", settings.wait_free_hours)
-        self.apply_schedule_button = QPushButton("Применить расписание")
-        self.apply_schedule_button.clicked.connect(self.apply_schedule)
-        self.task_state = QLabel()
-        self.task_state.setWordWrap(True)
-        when = QHBoxLayout()
-        when.addWidget(self.schedule_on)
-        when.addWidget(self.schedule_time)
-        when.addStretch(1)
-        schedule_form = QFormLayout()
-        schedule_form.addRow(when)
-        schedule_form.addRow("ПК свободен, если мышь не трогали:", self.idle)
-        schedule_form.addRow("Ждать свободный ПК не дольше:", self.wait_free)
-        schedule_form.addRow(self.apply_schedule_button, self.task_state)
-        schedule_box = QGroupBox("Каждый день автоматически")
-        schedule_box.setLayout(schedule_form)
-
-        right = QVBoxLayout()
-        right.addWidget(settings_box)
-        right.addWidget(schedule_box)
-        right.addStretch(1)
-        middle = QHBoxLayout()
-        middle.addWidget(queue_box, 3)
-        middle.addLayout(right, 2)
-
+        log_title = QLabel("Журнал")
+        log_title.setObjectName("Section")
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(5000)
-        self.log.setMinimumHeight(90)
+        self.log.setMaximumHeight(120)
         self.log.setPlaceholderText("Здесь будет видно, что делает автопилот.")
-        log_box = QGroupBox("Журнал")
-        log_layout = QVBoxLayout(log_box)
-        log_layout.addWidget(self.log)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 8, 0, 0)
-        layout.addWidget(intro)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(10)
         layout.addLayout(top)
-        layout.addWidget(self.timing_hint)
         layout.addWidget(self.warning)
-        layout.addLayout(middle)
-        layout.addWidget(log_box, 1)
+        layout.addWidget(self.list, 1)
+        layout.addWidget(log_title)
+        layout.addWidget(self.log)
 
-        for widget in (self.warmup, self.quiet, self.max_time, self.idle, self.wait_free):
-            widget.valueChanged.connect(self._save)
-        for box in (self.close_after, self.steam_nudge, self.check_app, self.schedule_on):
-            box.toggled.connect(self._save)
-        self.schedule_time.timeChanged.connect(self._save)
-
-        self._fill_table()
+        self._fill()
         self._show_last_report()
-        self._heal_schedule()
-        self._refresh_task_state()
-        self._update_timing_hint()
 
-    def _heal_schedule(self) -> None:
-        """A frozen system disk forgets the scheduled task on reboot: put it back."""
-        exe = running_exe()
-        if self._runtime.demo or exe is None or not self.settings.schedule_enabled:
+    # --- the list ---------------------------------------------------------
+
+    def _fill(self) -> None:
+        self.list.clear()
+        self.rows.clear()
+        for launcher_id in self.settings.ordered_ids():
+            launcher = _LAUNCHERS[launcher_id]
+            run_one = QPushButton("▶")
+            run_one.setObjectName("Round")
+            run_one.setToolTip(f"Обновить только {launcher.name}")
+            run_one.clicked.connect(lambda _=False, lid=launcher_id: self.start(only=lid))
+            exe = self._scan.get(launcher_id, (True, 0, None))[2]
+            row = LauncherRow(launcher_id, launcher.name, launcher_icon(launcher_id, exe), checkable=True,
+                              checked=self.settings.is_enabled(launcher_id), buttons=[run_one])
+            row.toggled.connect(self._toggled)
+            row.run_one = run_one
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, launcher_id)
+            item.setSizeHint(QSize(0, 58))
+            self.list.addItem(item)
+            self.list.setItemWidget(item, row)
+            self.rows[launcher_id] = row
+            self._show_found(launcher_id)
+            if not self.settings.is_enabled(launcher_id):
+                row.set_state("Выключен")
+
+    def _show_found(self, launcher_id: str) -> None:
+        row = self.rows.get(launcher_id)
+        if row is None or launcher_id not in self._scan:
             return
-        try:
-            if not scheduler.task_exists():
-                scheduler.create_task(exe, self.settings.schedule_time)
-                self._status("Задание расписания пропало (видимо, откат диска) — восстановил")
-        except scheduler.SchedulerError as exc:
-            self._status(f"Не удалось восстановить расписание: {exc}")
+        installed, games, exe = self._scan[launcher_id]
+        row.set_subtitle(games_text(games) if installed else "не найден на этом ПК")
+        row.set_icon(launcher_icon(launcher_id, exe))
+        row.run_one.setEnabled(installed and not self.is_running)
 
-    def _update_timing_hint(self) -> None:
-        least = (self.warmup.value() + self.quiet.value()) / 60
-        self.timing_hint.setText(
-            f"Лаунчер, которому нечего обновлять, занимает около {least:g} мин; Steam — около 1,5 мин, "
-            "потому что сам сообщает, что качает. Лаунчеры без игр пропускаются."
-        )
-
-    # --- widgets ------------------------------------------------------------
-
-    @staticmethod
-    def _spin(low: int, high: int, suffix: str, value: int, step: int = 1) -> QSpinBox:
-        spin = QSpinBox()
-        spin.setRange(low, high)
-        spin.setSingleStep(step)
-        spin.setMaximumWidth(170)
-        spin.setSuffix(suffix)
-        spin.setValue(min(max(value, low), high))
-        return spin
-
-    def _fill_table(self) -> None:
-        self._loading = True
-        ids = self.settings.ordered_ids()
-        self.table.setRowCount(len(ids))
-        for row, launcher_id in enumerate(ids):
-            name = QTableWidgetItem(launcher_icon(launcher_id, self._exe.get(launcher_id)), _LAUNCHERS[launcher_id].name)
-            name.setData(Qt.ItemDataRole.UserRole, launcher_id)
-            name.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable)
-            name.setCheckState(Qt.CheckState.Checked if self.settings.is_enabled(launcher_id) else Qt.CheckState.Unchecked)
-            self.table.setItem(row, 0, name)
-            self.table.setItem(row, 1, QTableWidgetItem(self._found.get(launcher_id, "…")))
-            state = QTableWidgetItem("" if self.settings.is_enabled(launcher_id) else "Выключен")
-            state.setForeground(QBrush(QColor(MUTED)))
-            self.table.setItem(row, 2, state)
-        self._loading = False
-
-    def _row_of(self, launcher_id: str) -> int:
-        for row in range(self.table.rowCount()):
-            if self.table.item(row, 0).data(Qt.ItemDataRole.UserRole) == launcher_id:
-                return row
-        return -1
-
-    def _on_item_changed(self, item: QTableWidgetItem) -> None:
-        if self._loading or item.column() != 0:
-            return
-        launcher_id = item.data(Qt.ItemDataRole.UserRole)
-        enabled = item.checkState() == Qt.CheckState.Checked
+    def _toggled(self, launcher_id: str, enabled: bool) -> None:
         self.settings.set_enabled(launcher_id, enabled)
         self._save()
-        state = self.table.item(item.row(), 2)
-        if state and not self.is_running:
-            state.setText("" if enabled else "Выключен")
+        if not self.is_running:
+            self.rows[launcher_id].set_state("" if enabled else "Выключен")
 
-    def _move(self, step: int) -> None:
-        row = self.table.currentRow()
-        ids = self.settings.ordered_ids()
-        target = row + step
-        if row < 0 or not 0 <= target < len(ids) or self.is_running:
-            return
-        ids[row], ids[target] = ids[target], ids[row]
-        self.settings.order = ids
+    def _order_changed(self) -> None:
+        order = [self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count())]
+        self.settings.order = order
         self._save()
-        self._fill_table()
-        self.table.selectRow(target)
+        self._fill()  # item widgets do not survive a drag, so the cards are rebuilt
+
+    def move(self, launcher_id: str, index: int) -> None:
+        order = [i for i in self.settings.ordered_ids() if i != launcher_id]
+        order.insert(index, launcher_id)
+        self.settings.order = order
+        self._save()
+        self._fill()
 
     def set_scan(self, result: ScanResult) -> None:
         for scan in result.scans:
-            if scan.installed:
-                text = f"Установлен · игр: {len(scan.games)}"
-            else:
-                text = "Не найден"
-            self._found[scan.launcher_id] = text
-            self._exe[scan.launcher_id] = scan.exe_path
-            row = self._row_of(scan.launcher_id)
-            if row >= 0:
-                self.table.item(row, 0).setIcon(launcher_icon(scan.launcher_id, scan.exe_path))
-                item = self.table.item(row, 1)
-                item.setText(text)
-                if scan.installed:
-                    item.setData(Qt.ItemDataRole.ForegroundRole, None)
-                else:
-                    item.setForeground(QBrush(QColor(MUTED)))
+            self._scan[scan.launcher_id] = (scan.installed, len(scan.games), scan.exe_path)
+            self._show_found(scan.launcher_id)
         warning = environment_warning(result, self._runtime.demo)
-        self.warning.setText(warning)
+        self.warning.setText(short_warning(result))
+        self.warning.setToolTip(warning)
         self.warning.setVisible(bool(warning))
 
     def _save(self) -> None:
-        if self._loading:
-            return
-        s = self.settings
-        s.warmup_seconds = self.warmup.value()
-        s.quiet_seconds = self.quiet.value()
-        s.max_minutes = self.max_time.value()
-        s.close_after = self.close_after.isChecked()
-        s.steam_validate_stuck = self.steam_nudge.isChecked()
-        s.check_app_updates = self.check_app.isChecked()
-        s.schedule_enabled = self.schedule_on.isChecked()
-        s.schedule_time = self.schedule_time.time().toString("HH:mm")
-        s.idle_minutes = self.idle.value()
-        s.wait_free_hours = self.wait_free.value()
-        self._update_timing_hint()
         try:
-            save_settings(s)
+            save_settings(self.settings)
         except OSError as exc:
             self._status(f"Не удалось сохранить настройки: {exc}")
-
-    # --- schedule -----------------------------------------------------------
-
-    def _refresh_task_state(self) -> None:
-        if self._runtime.demo:
-            self.task_state.setText("В демо-режиме расписание не создаётся")
-            return
-        try:
-            exists = scheduler.task_exists()
-        except scheduler.SchedulerError as exc:
-            self.task_state.setText(str(exc))
-            return
-        if exists:
-            self.task_state.setText("В планировщике Windows задание есть")
-        else:
-            self.task_state.setText("Задания в планировщике Windows нет")
-
-    def apply_schedule(self) -> None:
-        self._save()
-        if self._runtime.demo:
-            QMessageBox.information(self, "Демо", "В демо-режиме расписание не создаётся.")
-            return
-        exe = running_exe()
-        if exe is None:
-            QMessageBox.warning(self, "Расписание", "Расписание можно включить только из GUpdater.exe.")
-            return
-        try:
-            if self.settings.schedule_enabled:
-                scheduler.create_task(exe, self.settings.schedule_time)
-                message = (
-                    f"Готово. Каждый день в {self.settings.schedule_time} GUpdater дождётся, пока за компьютером "
-                    f"никого нет {self.settings.idle_minutes} мин, и обновит игры.\n\n"
-                    "Компьютер должен быть включён, а пользователь Windows — в системе."
-                )
-            else:
-                scheduler.delete_task()
-                message = "Расписание выключено."
-        except scheduler.SchedulerError as exc:
-            QMessageBox.warning(self, "Не получилось", str(exc))
-        else:
-            QMessageBox.information(self, "Расписание", message)
-        self._refresh_task_state()
 
     # --- running ------------------------------------------------------------
 
@@ -426,7 +234,13 @@ class AutopilotTab(QWidget):
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.isRunning())
 
-    def start(self, scheduled: bool = False, quit_after: bool = False) -> None:
+    def _toggle(self) -> None:
+        if self.is_running:
+            self.stop()
+        else:
+            self.start()
+
+    def start(self, scheduled: bool = False, quit_after: bool = False, only: str | None = None) -> None:
         if self.is_running:
             return
         self._quit_after = quit_after
@@ -437,61 +251,66 @@ class AutopilotTab(QWidget):
                 QTimer.singleShot(1000, QApplication.quit)
             return
         self._lock = lock
-        self._save()
-        self._fill_table()
-        for row in range(self.table.rowCount()):
-            launcher_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-            if self.settings.is_enabled(launcher_id):
-                self.table.item(row, 2).setText("В очереди")
+        for launcher_id, row in self.rows.items():
+            if only:
+                row.set_state("В очереди" if launcher_id == only else "")
+            else:
+                row.set_state("В очереди" if self.settings.is_enabled(launcher_id) else "Выключен")
+            row.run_one.setEnabled(False)
         self.log.clear()
-        self._append("Автопилот запущен" + (" по расписанию" if scheduled else ""))
-        self._thread = AutopilotThread(self._runtime, self.settings, scheduled)
+        name = _LAUNCHERS[only].name if only else ""
+        self._append("Автопилот запущен" + (" по расписанию" if scheduled else "") + (f": только {name}" if only else ""))
+        self._thread = AutopilotThread(self._runtime, self.settings, scheduled, only)
         self._thread.run_changed.connect(self._on_run_changed)
         self._thread.log_line.connect(self._append)
         self._thread.done.connect(self._on_done)
         self._thread.start()
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        for widget in (self.up_button, self.down_button):
-            widget.setEnabled(False)
+        self.start_button.setText("Остановить")
+        self.start_button.setObjectName("")
+        self._restyle(self.start_button)
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self._status("Автопилот работает…")
         self.running_changed.emit(True)
 
     def stop(self) -> None:
         if self.is_running:
             self._thread.stop_event.set()
-            self.stop_button.setEnabled(False)
+            self.start_button.setEnabled(False)
             self._append("Останавливаю…")
 
     def wait_finished(self, msecs: int) -> None:
         if self._thread:
             self._thread.wait(msecs)
 
+    @staticmethod
+    def _restyle(widget: QWidget) -> None:
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+
     def _append(self, line: str) -> None:
         self.log.appendPlainText(line)
 
     def _on_run_changed(self, run: LauncherRun) -> None:
-        row = self._row_of(run.launcher_id)
-        if row < 0:
+        row = self.rows.get(run.launcher_id)
+        if row is None:
             return
-        item = self.table.item(row, 2)
-        item.setText(run.phase)
         color = OUTCOME_COLORS.get(run.outcome, BLUE) if run.outcome else BLUE
-        item.setForeground(QBrush(QColor(color)))
-        if run.changes:
-            item.setToolTip("\n".join(run.changes))
+        text = run.outcome.text if run.outcome else run.phase
+        tooltip = "\n".join([run.phase, *run.changes, *run.warnings])
+        row.set_state(text, color, tooltip)
 
     def _on_done(self, runs, report_path: str, summary: str) -> None:
         if self._lock:
             self._lock.unlock()
             self._lock = None
         self._append(f"Готово: {summary}")
-        if report_path:
-            self._append(f"Отчёт: {report_path}")
+        self.start_button.setText("Обновить всё")
+        self.start_button.setObjectName("Primary")
         self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        for widget in (self.up_button, self.down_button):
-            widget.setEnabled(True)
+        self._restyle(self.start_button)
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        for launcher_id in self.rows:
+            self._show_found(launcher_id)
         self._show_last_report(summary)
         self._status(f"Автопилот закончил: {summary}")
         self.running_changed.emit(False)
@@ -501,13 +320,13 @@ class AutopilotTab(QWidget):
 
     def _show_last_report(self, summary: str = "") -> None:
         report = latest_report(reports_dir())
-        self.open_report_button.setEnabled(report is not None)
+        self.report_button.setEnabled(report is not None)
         if report is None:
-            self.last_run.setText("Автопилот ещё не запускался")
-        else:
-            stamp = report.stem.removeprefix("автопилот-")
-            when = f"{stamp[6:8]}.{stamp[4:6]} {stamp[9:11]}:{stamp[11:13]}" if len(stamp) >= 13 else stamp
-            self.last_run.setText(f"Последний запуск: {when}" + (f" — {summary}" if summary else ""))
+            self.last_run.setText("Ещё не запускался")
+            return
+        stamp = report.stem.removeprefix("автопилот-")
+        when = f"{stamp[6:8]}.{stamp[4:6]} в {stamp[9:11]}:{stamp[11:13]}" if len(stamp) >= 13 else stamp
+        self.last_run.setText(f"Последний запуск {when}" + (f" · {summary}" if summary else ""))
 
     def open_last_report(self) -> None:
         report = latest_report(reports_dir())

@@ -56,20 +56,15 @@ class GamesTab(QWidget):
         self._report = ""
         self._result: ScanResult | None = None
 
-        hint = QLabel(
-            "Что установлено на этом компьютере. Отчёт можно сохранить и прислать в чат — "
-            "в нём нет имён аккаунтов, почты и данных входа."
-        )
-        hint.setWordWrap(True)
-        hint.setObjectName("Muted")
-
-        self.rescan_button = QPushButton("Сканировать заново")
-        self.save_button = QPushButton("Сохранить отчёт…")
-        self.copy_button = QPushButton("Скопировать отчёт")
+        self.rescan_button = QPushButton("Обновить список")
+        self.save_button = QPushButton("Сохранить отчёт")
+        self.save_button.setToolTip("В отчёте нет имён аккаунтов, почты и данных входа")
+        self.copy_button = QPushButton("Скопировать")
         self.rescan_button.clicked.connect(self.rescan)
         self.save_button.clicked.connect(self.save_report)
         self.copy_button.clicked.connect(self.copy_report)
         self.summary = QLabel()
+        self.summary.setObjectName("Muted")
 
         buttons = QHBoxLayout()
         for button in (self.rescan_button, self.save_button, self.copy_button):
@@ -89,8 +84,7 @@ class GamesTab(QWidget):
             self.tree.setColumnWidth(column, width)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 8, 0, 0)
-        layout.addWidget(hint)
+        layout.setContentsMargins(0, 10, 0, 0)
         layout.addLayout(buttons)
         layout.addWidget(self.tree, 1)
         self._set_busy(True)
@@ -126,8 +120,7 @@ class GamesTab(QWidget):
         games = sum(len(s.games) for s in result.scans)
         updates = sum(s.updates_needed for s in result.scans)
         self.summary.setText(
-            f"Лаунчеров: {found} из {len(result.scans)} · игр: {games}"
-            + (f" · нужно обновить: {updates}" if updates else "")
+            f"{found} лаунчеров · {games} игр" + (f" · ждут обновления: {updates}" if updates else "")
         )
         self._status(f"Поиск игр закончен ({result.finished_at:%H:%M})")
         self._set_busy(False)
