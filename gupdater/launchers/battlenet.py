@@ -9,6 +9,7 @@ from gupdater.core import protobuf
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
 from gupdater.launchers.base import Launcher, check_paths, exe_candidates, protocol_exe
+from gupdater.logins import LearnAreas, SessionSpec
 
 _UID = re.compile(r"--uid=([\w.-]+)")
 _VERSION = re.compile(r"^\d+(\.\d+){2,3}$")
@@ -47,6 +48,19 @@ class BattleNet(Launcher):
         # Downloads are done by Agent.exe, which lives in ProgramData.
         agent = ctx.env_path("PROGRAMDATA", "Battle.net")
         return (str(agent),) if agent else ()
+
+    login_hint = "Войдите под аккаунтом клуба и отметьте «Запомнить меня»."
+
+    def session_spec(self, ctx: SystemContext, scan: LauncherScan) -> SessionSpec:
+        config = ctx.env_path("APPDATA", "Battle.net", "Battle.net.config")
+        return SessionSpec(files=(str(config),) if config else ())
+
+    def learn_areas(self, ctx: SystemContext, scan: LauncherScan) -> LearnAreas:
+        folders = [ctx.env_path("APPDATA", "Battle.net"), ctx.env_path("LOCALAPPDATA", "Battle.net")]
+        return LearnAreas(
+            folders=tuple(str(f) for f in folders if f),
+            registry_keys=(r"HKCU\Software\Blizzard Entertainment\Battle.net",),
+        )
 
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:
         exe_paths = []

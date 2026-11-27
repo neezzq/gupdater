@@ -5,6 +5,7 @@ from __future__ import annotations
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
 from gupdater.launchers.base import Launcher, check_paths, exe_candidates, is_managed_by_other_launcher, protocol_exe
+from gupdater.logins import LearnAreas
 
 _LAUNCHER_NAMES = {"ea app", "ea desktop", "origin"}
 
@@ -15,6 +16,10 @@ class EA(Launcher):
     process_names = ("eadesktop.exe", "eabackgroundservice.exe", "origin.exe")
     program_names = ("ea app", "ea desktop")
     helper_processes = ("ealocalhostsvc.exe",)
+
+    def learn_areas(self, ctx: SystemContext, scan: LauncherScan) -> LearnAreas:
+        folders = [ctx.env_path("LOCALAPPDATA", "Electronic Arts"), ctx.env_path("APPDATA", "Electronic Arts")]
+        return LearnAreas(folders=tuple(str(f) for f in folders if f), registry_keys=(r"HKCU\Software\Electronic Arts",))
 
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:
         exe_paths = exe_candidates(

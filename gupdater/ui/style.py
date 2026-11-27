@@ -1,13 +1,13 @@
-"""Colours shared by the tabs."""
+"""Colours shared by the tabs (Apple's dark-mode system colours)."""
 
 from gupdater.autopilot.engine import Outcome
 from gupdater.core.models import GameStatus
 
-MUTED = "#8a8f98"
-GREEN = "#1a7f37"
-ORANGE = "#c05600"
-BLUE = "#0b62d6"
-RED = "#c62828"
+MUTED = "#8E8E93"
+GREEN = "#30D158"
+ORANGE = "#FF9F0A"
+BLUE = "#0A84FF"
+RED = "#FF453A"
 
 STATUS_COLORS = {
     GameStatus.OK: GREEN,

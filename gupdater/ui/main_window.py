@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QSizePolicy,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -24,8 +25,10 @@ from gupdater import selfupdate
 from gupdater.settings import Settings
 from gupdater.ui.autopilot_tab import AutopilotTab
 from gupdater.ui.games_tab import GamesTab
+from gupdater.ui.logins_tab import LoginsTab, recover_logins
 from gupdater.ui.runtime import Runtime
 from gupdater.ui.style import GREEN, MUTED, RED
+from gupdater.ui.theme import Backdrop, dark_title_bar, logo_pixmap
 
 
 class UpdateCheckThread(QThread):
@@ -70,44 +73,57 @@ class MainWindow(QMainWindow):
         self._download: DownloadThread | None = None
 
         self.setWindowTitle(f"GUpdater {__version__}" + (" — демо" if runtime.demo else ""))
-        self.resize(1240, 820)
+        self.resize(1280, 860)
 
+        logo = QLabel()
+        logo.setPixmap(logo_pixmap(46, self.devicePixelRatioF()))
         title = QLabel("GUpdater")
-        font = title.font()
-        font.setPointSize(font.pointSize() + 8)
-        font.setBold(True)
-        title.setFont(font)
-        version = QLabel(f"версия {__version__}" + ("  ·  ДЕМО: ненастоящие данные" if runtime.demo else ""))
-        version.setStyleSheet(f"color: {MUTED};")
+        title.setObjectName("Title")
+        version = QLabel(f"версия {__version__}")
+        version.setObjectName("Chip")
+        demo = QLabel("ДЕМО: ненастоящие данные")
+        demo.setObjectName("Chip")
+        demo.setVisible(runtime.demo)
         self.update_status = QLabel()
         self.update_button = QPushButton("Проверить обновления программы")
         self.update_button.clicked.connect(self._on_update_button)
 
         header = QHBoxLayout()
+        header.setSpacing(10)
+        header.addWidget(logo)
         header.addWidget(title)
-        header.addSpacing(10)
-        header.addWidget(version)
+        for chip in (version, demo):
+            chip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            header.addWidget(chip, 0, Qt.AlignmentFlag.AlignVCenter)
         header.addStretch(1)
         header.addWidget(self.update_status)
         header.addWidget(self.update_button)
 
         self.games = GamesTab(runtime, self._show_status)
         self.autopilot = AutopilotTab(runtime, settings, self._show_status)
+        self.logins = LoginsTab(runtime, settings, self._show_status)
         self.tabs = QTabWidget()
         self.tabs.addTab(self.autopilot, "Автопилот")
+        self.tabs.addTab(self.logins, "Входы")
         self.tabs.addTab(self.games, "Игры на этом ПК")
         self.games.scanned.connect(self.autopilot.set_scan)
+        self.games.scanned.connect(self.logins.set_scan)
         self.games.scan_finished.connect(self.scan_finished)
         self.autopilot.run_finished.connect(self.games.rescan)
         self.autopilot.running_changed.connect(lambda running: self.update_button.setEnabled(not running))
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(16, 12, 16, 8)
+        layout.setContentsMargins(20, 14, 20, 8)
+        layout.setSpacing(6)
         layout.addLayout(header)
         layout.addWidget(self.tabs, 1)
-        central = QWidget()
+        central = Backdrop()
         central.setLayout(layout)
         self.setCentralWidget(central)
+
+        # If GUpdater died mid-update, the club's login may still be in a launcher.
+        if recover_logins(runtime, settings, self._show_status):
+            self._show_status("Прошлое обновление прервалось: вход клуба убран из лаунчеров, всё как было")
 
         if updated_from:
             self._show_status(f"Программа обновлена: {updated_from} → {__version__}")
@@ -115,6 +131,10 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.games.rescan)
         if settings.check_app_updates and not runtime.demo:
             QTimer.singleShot(1500, lambda: self.check_updates(silent=True))
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        dark_title_bar(self)
 
     # --- status -------------------------------------------------------------
 

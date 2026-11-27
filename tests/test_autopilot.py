@@ -267,7 +267,7 @@ def test_stuck_update_is_nudged_then_finishes(tmp_path):
     log = "\n".join(pilot.log_lines)
     assert "ждут обновления: Dota 2" in log and "nudge Dota 2" in log
     assert run.outcome is Outcome.UPDATED
-    assert 310 + 180 <= system.t < 310 + 180 + 40  # last busy poll + quiet period + closing
+    assert 310 + 30 <= system.t < 310 + 30 + 40  # signed in and nothing pending: the short quiet period
 
 
 def test_waiting_games_and_the_nudge_countdown_are_shown(tmp_path):
@@ -417,3 +417,13 @@ def test_launcher_self_update_and_shrunken_game_are_reported(tmp_path):
     assert run.message == "обновился сам лаунчер, версии игр прежние"
     assert run.changes == ["Fake (сам лаунчер): 26.1 → 26.2"]
     assert run.warnings and "272 МБ вместо 120.0 ГБ" in run.warnings[0]
+
+
+def test_launcher_reporting_its_state_finishes_fast(tmp_path):
+    """Steam says it is signed in and has nothing to do: no need for the long wait."""
+    system = FakeSystem()
+    launcher = FakeLauncher(tmp_path, system, progress=lambda: Progress(busy=False, pending=[], logged_in=system.t >= 20))
+    system.on_start[str(launcher.exe)] = downloads_on_start("fake.exe", [])
+    run = make_pilot([launcher], system).run()[0]
+    assert run.outcome is Outcome.NOTHING
+    assert 20 + 30 + 30 <= system.t < 20 + 30 + 30 + 20  # signed in at 20 s, +30 s settle, +30 s quiet, closing

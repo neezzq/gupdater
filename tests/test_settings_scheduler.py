@@ -12,7 +12,7 @@ from gupdater.settings import DEFAULT_ORDER, Settings, load_settings, save_setti
 
 def test_settings_round_trip(tmp_path):
     path = tmp_path / "s.json"
-    settings = Settings(order=["epic", "steam"], disabled=["iccup"], warmup_minutes=5, schedule_enabled=True)
+    settings = Settings(order=["epic", "steam"], disabled=["iccup"], warmup_seconds=60, schedule_enabled=True)
     save_settings(settings, path)
     loaded = load_settings(path)
     assert loaded == settings
@@ -25,11 +25,11 @@ def test_broken_or_odd_settings_fall_back_to_defaults(tmp_path):
     path = tmp_path / "s.json"
     path.write_text("{not json", encoding="utf-8")
     assert load_settings(path) == Settings()
-    path.write_text(json.dumps({"warmup_minutes": "five", "close_after": 1, "order": ["nope", "riot"],
-                                "quiet_minutes": -3, "unknown": True}), encoding="utf-8")
+    path.write_text(json.dumps({"warmup_seconds": "five", "close_after": 1, "order": ["nope", "riot"],
+                                "quiet_seconds": -3, "warmup_minutes": 3, "unknown": True}), encoding="utf-8")
     loaded = load_settings(path)
-    assert loaded.warmup_minutes == Settings().warmup_minutes
-    assert loaded.close_after is True and loaded.quiet_minutes == Settings().quiet_minutes
+    assert loaded.warmup_seconds == Settings().warmup_seconds  # wrong type and old 0.2.x key both ignored
+    assert loaded.close_after is True and loaded.quiet_seconds == Settings().quiet_seconds
     assert loaded.ordered_ids()[0] == "riot"
 
 

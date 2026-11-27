@@ -11,6 +11,7 @@ from pathlib import Path
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
 from gupdater.launchers.base import Launcher, check_paths, find_entries
+from gupdater.logins import LearnAreas
 
 _WAR3_EXES = ("war3.exe", "warcraft iii.exe", "frozen throne.exe")
 
@@ -20,6 +21,10 @@ class ICCup(Launcher):
     name = "iCCup"
     # The launcher updates itself and its maps even when no game folder was recognised.
     skip_without_games = False
+
+    def learn_areas(self, ctx: SystemContext, scan: LauncherScan) -> LearnAreas:
+        folders = [Path(scan.exe_path).parent if scan.exe_path else None]
+        return LearnAreas(folders=tuple(str(f) for f in folders if f), registry_keys=(r"HKCU\Software\iCCup",))
 
     def is_running(self, ctx: SystemContext) -> bool:
         return any("iccup" in name for name in ctx.running)

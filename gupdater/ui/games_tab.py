@@ -60,7 +60,7 @@ class GamesTab(QWidget):
             "в нём нет имён аккаунтов, почты и данных входа."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {MUTED};")
+        hint.setObjectName("Muted")
 
         self.rescan_button = QPushButton("Сканировать заново")
         self.save_button = QPushButton("Сохранить отчёт…")

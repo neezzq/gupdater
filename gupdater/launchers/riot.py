@@ -8,6 +8,7 @@ from pathlib import Path
 from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
 from gupdater.launchers.base import Launcher, check_paths, exe_from_command, protocol_exe
+from gupdater.logins import LearnAreas, SessionSpec
 
 KNOWN_NAMES = {
     "valorant": "VALORANT",
@@ -35,6 +36,17 @@ class Riot(Launcher):
     process_names = ("riotclientservices.exe", "riot client.exe", "riotclientux.exe")
     program_names = ("riot client",)
     helper_processes = ("riotclientuxrender.exe",)
+    login_hint = "Войдите под аккаунтом клуба и отметьте «Оставаться в системе»."
+
+    def session_spec(self, ctx: SystemContext, scan: LauncherScan) -> SessionSpec:
+        data = ctx.env_path("LOCALAPPDATA", "Riot Games", "Riot Client", "Data")
+        if not data:
+            return SessionSpec()
+        return SessionSpec(files=tuple(str(data / n) for n in ("RiotGamesPrivateSettings.yaml", "RiotClientPrivateSettings.yaml")))
+
+    def learn_areas(self, ctx: SystemContext, scan: LauncherScan) -> LearnAreas:
+        client = ctx.env_path("LOCALAPPDATA", "Riot Games", "Riot Client")
+        return LearnAreas(folders=tuple(str(client / sub) for sub in ("Data", "Config")) if client else ())
 
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:
         riot_data = ctx.env_path("PROGRAMDATA", "Riot Games")

@@ -53,7 +53,8 @@ def build_runtime(demo: bool):
     speed = float(os.environ.get("GUPDATER_DEMO_SPEED", "100"))
     world = DemoWorld(folder, speed=speed)
     set_data_dir(folder / "data")
-    return Runtime(context_factory=world.context, system_factory=lambda: world.system, demo=True)
+    return Runtime(context_factory=world.context, system_factory=lambda: world.system, demo=True,
+                   registry_factory=lambda: world.base.registry)
 
 
 def write_report(path: Path, runtime) -> None:
@@ -81,9 +82,11 @@ def run_window(runtime, args: argparse.Namespace) -> int:
 
     from gupdater.settings import load_settings
     from gupdater.ui.main_window import MainWindow
+    from gupdater.ui.theme import apply_theme
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("GUpdater")
+    apply_theme(app)
     window = MainWindow(runtime, load_settings(), updated_from=args.updated_from)
     window.show()
 

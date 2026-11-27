@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 
@@ -34,7 +35,7 @@ def test_window_shows_version_tabs_and_scan(demo_window):
 
     app, window = demo_window
     assert __version__ in window.windowTitle()
-    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == ["Автопилот", "Игры на этом ПК"]
+    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == ["Автопилот", "Входы", "Игры на этом ПК"]
     tree = window.games.tree
     assert tree.topLevelItemCount() == 8
     assert tree.topLevelItem(0).text(0) == "Steam"
@@ -77,3 +78,34 @@ def test_unchecked_launcher_is_skipped_and_order_is_saved(demo_window):
     saved = load_settings()
     assert saved.disabled == ["epic"]
     assert saved.ordered_ids()[:2] == ["epic", "steam"]
+
+
+def test_club_login_end_to_end_in_demo(demo_window):
+    """Stage 3 on the demo PC: the wizard saves Steam's club login, the autopilot uses it."""
+    from gupdater.autopilot.login_wizard import LoginWizard
+    from gupdater.launchers.steam import Steam
+    from gupdater.logins import Vault
+    from gupdater.settings import logins_dir
+
+    app, window = demo_window
+    runtime = window.runtime
+    local_vdf = None
+    wizard = LoginWizard(Steam(), runtime.context_factory, runtime.system_factory(), runtime.registry_factory(),
+                         Vault(logins_dir()))
+    wizard.prepare()
+    wizard.open_launcher()  # in the demo, starting Steam "signs in" (writes local.vdf)
+    spec = wizard.finish()
+    local_vdf = next(f for f in spec.files if f.endswith("local.vdf"))
+    assert not Path(local_vdf).exists()  # club login taken out again: there was none before
+    assert Vault(logins_dir()).has_club("steam")
+
+    window.logins.refresh()
+    assert window.logins.table.item(0, 1).text().startswith("Запомнен")
+
+    tab = window.autopilot
+    tab.start()
+    _wait(app, tab.run_finished)
+    log = tab.log.toPlainText()
+    assert "Steam: подставил вход клуба" in log
+    assert "убрал вход клуба" in log
+    assert not Path(local_vdf).exists()  # and taken out after the update

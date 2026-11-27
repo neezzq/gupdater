@@ -14,6 +14,9 @@ from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
 from gupdater.core.registry import reg_str, reg_value
 from gupdater.launchers.base import Launcher, LaunchSpec, Progress, check_paths, protocol_exe
+from gupdater.logins import LearnAreas, SessionSpec
+
+STEAM_KEY = r"HKCU\Software\Valve\Steam"
 
 # EAppState bits from the Steam client.
 UPDATE_REQUIRED = 2
@@ -77,6 +80,23 @@ class Steam(Launcher):
     program_names = ("steam",)
     helper_processes = ("steamservice.exe",)
     start_args = ("-silent",)
+    login_hint = "Войдите под аккаунтом клуба и оставьте включённым «Запомнить меня»."
+
+    def session_spec(self, ctx: SystemContext, scan: LauncherScan) -> SessionSpec:
+        if not scan.exe_path:
+            return SessionSpec()
+        root = Path(scan.exe_path).parent
+        local = ctx.env_path("LOCALAPPDATA", "Steam", "local.vdf")
+        return SessionSpec(
+            files=tuple(str(p) for p in (root / "config" / "loginusers.vdf", root / "config" / "config.vdf", local) if p),
+            registry_values=((STEAM_KEY, "AutoLoginUser"), (STEAM_KEY, "RememberPassword")),
+        )
+
+    def learn_areas(self, ctx: SystemContext, scan: LauncherScan) -> LearnAreas:
+        if not scan.exe_path:
+            return LearnAreas()
+        local = ctx.env_path("LOCALAPPDATA", "Steam")
+        return LearnAreas(folders=tuple(str(p) for p in (Path(scan.exe_path).parent / "config", local) if p))
 
     def launch_spec(self, ctx: SystemContext, scan: LauncherScan) -> LaunchSpec | None:
         spec = super().launch_spec(ctx, scan)

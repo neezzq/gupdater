@@ -13,6 +13,7 @@ from pathlib import Path
 from gupdater.core.context import SystemContext, UninstallEntry
 from gupdater.core.models import Game, GameStatus, LauncherScan
 from gupdater.launchers.base import Launcher, check_paths, exe_candidates, exe_from_command, protocol_exe
+from gupdater.logins import LearnAreas
 
 _EXE_NAMES = ("lgc.exe", "lgc_api.exe")
 
@@ -49,6 +50,11 @@ class Lesta(Launcher):
     name = "Lesta Game Center"
     process_names = _EXE_NAMES
     program_names = ("lesta game center", "игровой центр lesta")
+
+    def learn_areas(self, ctx: SystemContext, scan: LauncherScan) -> LearnAreas:
+        folders = [ctx.env_path("APPDATA", "Lesta"), ctx.env_path("LOCALAPPDATA", "Lesta"),
+                   Path(scan.exe_path).parent if scan.exe_path else None]
+        return LearnAreas(folders=tuple(str(f) for f in folders if f), registry_keys=(r"HKCU\Software\Lesta",))
 
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:
         center = ctx.env_path("PROGRAMDATA", "Lesta", "GameCenter")

@@ -9,6 +9,7 @@ from gupdater.core.context import SystemContext
 from gupdater.core.models import Game, GameStatus, LauncherScan
 from gupdater.core.registry import reg_str
 from gupdater.launchers.base import Launcher, check_paths, find_entries, protocol_exe
+from gupdater.logins import LearnAreas, SessionSpec
 
 _EXE_TAIL = ("Launcher", "Portal", "Binaries")
 
@@ -20,6 +21,19 @@ class Epic(Launcher):
     program_names = ("epic games launcher",)
     helper_processes = ("epicwebhelper.exe",)
     start_args = ("-silent",)
+
+    def session_spec(self, ctx: SystemContext, scan: LauncherScan) -> SessionSpec:
+        config = ctx.env_path("LOCALAPPDATA", "EpicGamesLauncher", "Saved", "Config")
+        if not config:
+            return SessionSpec()
+        return SessionSpec(
+            files=tuple(str(config / sub / "GameUserSettings.ini") for sub in ("Windows", "WindowsEditor")),
+            registry_values=((r"HKCU\Software\Epic Games\Unreal Engine\Identifiers", "AccountId"),),
+        )
+
+    def learn_areas(self, ctx: SystemContext, scan: LauncherScan) -> LearnAreas:
+        config = ctx.env_path("LOCALAPPDATA", "EpicGamesLauncher", "Saved", "Config")
+        return LearnAreas(folders=(str(config),) if config else ())
 
     def _scan(self, ctx: SystemContext, result: LauncherScan) -> None:
         data_dir_reg = reg_str(ctx.registry, r"HKLM\SOFTWARE\WOW6432Node\Epic Games\EpicGamesLauncher", "AppDataPath")

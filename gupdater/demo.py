@@ -291,6 +291,11 @@ class DemoSystem:
             name, profile, graceful = _DEMO_PROFILES[exe]
             self._add(name, profile, graceful)
             if exe == "steam.exe":
+                local = Path(self.world.base.env["LOCALAPPDATA"]) / "Steam" / "local.vdf"
+                local.parent.mkdir(parents=True, exist_ok=True)
+                local.write_text('"MachineUserConfigStore"\n{\n\t"ConnectCache"\n\t{\n\t\t"1a2b3c1"\t"demo-club-token"\n\t}\n}\n',
+                                 encoding="utf-8")
+            if exe == "steam.exe":
                 self._events.append((self.t + 140, lambda: self._steam_done("578080")))
 
     def processes(self):

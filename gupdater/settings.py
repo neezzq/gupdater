@@ -22,8 +22,10 @@ class Settings:
     order: list[str] = field(default_factory=lambda: list(DEFAULT_ORDER))
     disabled: list[str] = field(default_factory=list)
     # Autopilot timings.
-    warmup_minutes: int = 3        # give the launcher time to start and find updates
-    quiet_minutes: int = 3         # this long without downloading = finished
+    # Seconds (0.2.x stored minutes under other names; those old values are ignored,
+    # so everybody gets the faster timings).
+    warmup_seconds: int = 120      # give the launcher time to start and find updates
+    quiet_seconds: int = 90        # this long without downloading = finished
     max_minutes: int = 120         # give up on one launcher after this
     activity_kb_per_s: int = 1024  # below this the launcher counts as idle
     close_after: bool = True
@@ -34,6 +36,8 @@ class Settings:
     idle_minutes: int = 10         # nobody touched mouse/keyboard this long = PC is free
     wait_free_hours: int = 6       # how long a scheduled run waits for a free PC
     check_app_updates: bool = True
+    # Stage 3: put the club's saved login in for the update, then take it out again.
+    use_club_logins: bool = True
 
     def ordered_ids(self) -> list[str]:
         """Saved order, without unknown ids, plus launchers added in newer versions."""
@@ -88,6 +92,10 @@ def reports_dir() -> Path:
     folder = data_dir() / "GUpdater-отчёты"
     folder.mkdir(parents=True, exist_ok=True)
     return folder
+
+
+def logins_dir() -> Path:
+    return data_dir() / "GUpdater-входы"
 
 
 def load_settings(path: Path | None = None) -> Settings:

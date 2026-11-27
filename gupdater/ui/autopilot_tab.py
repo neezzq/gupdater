@@ -62,6 +62,9 @@ class AutopilotThread(QThread):
 
     def _run(self) -> None:
         settings, runtime = self._settings, self._runtime
+        from gupdater.ui.logins_tab import make_logins, recover_logins
+
+        recover_logins(runtime, settings, self.log_line.emit)
         system = runtime.system_factory()
         pilot = Autopilot(
             [_LAUNCHERS[i] for i in settings.ordered_ids()],
@@ -72,6 +75,7 @@ class AutopilotThread(QThread):
             on_update=lambda run: self.run_changed.emit(replace(run, changes=list(run.changes))),
             on_log=self.log_line.emit,
             watch_user_input=self._scheduled,
+            logins=make_logins(runtime, settings),
         )
         ctx = runtime.context_factory()
         started = system.wall_time()
@@ -112,9 +116,10 @@ class AutopilotTab(QWidget):
             "Перед этим войдите в лаунчеры и включите в них автообновление игр."
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet(f"color: {MUTED};")
+        intro.setObjectName("Muted")
 
         self.start_button = QPushButton("▶  Запустить сейчас")
+        self.start_button.setObjectName("Primary")
         self.stop_button = QPushButton("■  Остановить")
         self.open_report_button = QPushButton("Открыть последний отчёт")
         self.open_folder_button = QPushButton("Папка с отчётами")
@@ -126,7 +131,7 @@ class AutopilotTab(QWidget):
         self.last_run = QLabel()
         self.timing_hint = QLabel()
         self.timing_hint.setWordWrap(True)
-        self.timing_hint.setStyleSheet(f"color: {MUTED};")
+        self.timing_hint.setObjectName("Muted")
 
         top = QHBoxLayout()
         for button in (self.start_button, self.stop_button):
@@ -140,12 +145,15 @@ class AutopilotTab(QWidget):
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Лаунчер", "На этом ПК", "Состояние"])
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.setShowGrid(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setColumnWidth(0, 210)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.itemChanged.connect(self._on_item_changed)
         self.up_button = QPushButton("↑ Выше")
@@ -163,8 +171,8 @@ class AutopilotTab(QWidget):
         queue_layout.addLayout(order_buttons)
 
         # Settings.
-        self.warmup = self._spin(1, 30, " мин", settings.warmup_minutes)
-        self.quiet = self._spin(1, 30, " мин", settings.quiet_minutes)
+        self.warmup = self._spin(30, 900, " с", settings.warmup_seconds, step=15)
+        self.quiet = self._spin(30, 900, " с", settings.quiet_seconds, step=15)
         self.max_time = self._spin(10, 600, " мин", settings.max_minutes)
         self.close_after = QCheckBox("Закрывать лаунчер, когда он закончит")
         self.close_after.setChecked(settings.close_after)
@@ -187,6 +195,7 @@ class AutopilotTab(QWidget):
         self.schedule_on.setChecked(settings.schedule_enabled)
         self.schedule_time = QTimeEdit(QTime.fromString(settings.schedule_time, "HH:mm"))
         self.schedule_time.setDisplayFormat("HH:mm")
+        self.schedule_time.setMaximumWidth(110)
         self.idle = self._spin(1, 120, " мин", settings.idle_minutes)
         self.wait_free = self._spin(1, 24, " ч", settings.wait_free_hours)
         self.apply_schedule_button = QPushButton("Применить расписание")
@@ -241,19 +250,20 @@ class AutopilotTab(QWidget):
         self._update_timing_hint()
 
     def _update_timing_hint(self) -> None:
-        least = self.warmup.value() + self.quiet.value()
+        least = (self.warmup.value() + self.quiet.value()) / 60
         self.timing_hint.setText(
-            f"Каждый лаунчер занимает не меньше {least} мин: {self.warmup.value()} мин на запуск и поиск "
-            f"обновлений и {self.quiet.value()} мин тишины в конце, чтобы убедиться, что загрузка закончилась. "
-            "Лаунчеры без игр пропускаются."
+            f"Лаунчер, которому нечего обновлять, занимает около {least:g} мин; Steam — около 1,5 мин, "
+            "потому что сам сообщает, что качает. Лаунчеры без игр пропускаются."
         )
 
     # --- widgets ------------------------------------------------------------
 
     @staticmethod
-    def _spin(low: int, high: int, suffix: str, value: int) -> QSpinBox:
+    def _spin(low: int, high: int, suffix: str, value: int, step: int = 1) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(low, high)
+        spin.setSingleStep(step)
+        spin.setMaximumWidth(170)
         spin.setSuffix(suffix)
         spin.setValue(min(max(value, low), high))
         return spin
@@ -323,8 +333,8 @@ class AutopilotTab(QWidget):
         if self._loading:
             return
         s = self.settings
-        s.warmup_minutes = self.warmup.value()
-        s.quiet_minutes = self.quiet.value()
+        s.warmup_seconds = self.warmup.value()
+        s.quiet_seconds = self.quiet.value()
         s.max_minutes = self.max_time.value()
         s.close_after = self.close_after.isChecked()
         s.steam_validate_stuck = self.steam_nudge.isChecked()

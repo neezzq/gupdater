@@ -12,6 +12,7 @@ from typing import ClassVar, Iterable
 from gupdater.core.context import SystemContext, UninstallEntry
 from gupdater.core.models import LauncherScan
 from gupdater.core.registry import reg_str
+from gupdater.logins import LearnAreas, SessionSpec
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,17 @@ class Launcher(ABC):
 
     def progress(self, ctx: SystemContext) -> Progress:
         return Progress()
+
+    def session_spec(self, ctx: SystemContext, scan: LauncherScan) -> SessionSpec:
+        """Files and registry values known to hold this launcher's login (may be empty)."""
+        return SessionSpec()
+
+    def learn_areas(self, ctx: SystemContext, scan: LauncherScan) -> LearnAreas:
+        """Where to look for the login when it is not known in advance."""
+        return LearnAreas()
+
+    # Shown in the login wizard: how to sign in so that the login is remembered.
+    login_hint: ClassVar[str] = "Войдите под аккаунтом клуба и отметьте «Запомнить меня», если такая галочка есть."
 
     def nudge_commands(self, ctx: SystemContext, scan: LauncherScan, pending: list[tuple[str, str]]) -> list[tuple[tuple[str, ...], str]]:
         """Commands that make the launcher start stuck updates: (command, log message)."""

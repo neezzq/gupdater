@@ -28,12 +28,37 @@ def split_hive(path: str) -> tuple[str, str]:
     return hive, "\\".join(parts[1:])
 
 
+# Windows registry value types used here.
+REG_SZ, REG_EXPAND_SZ, REG_BINARY, REG_DWORD, REG_MULTI_SZ, REG_QWORD = 1, 2, 3, 4, 7, 11
+
+
 class Registry(Protocol):
     def subkeys(self, path: str) -> list[str]:
         """Names of the direct subkeys of ``path`` (empty if it does not exist)."""
 
     def values(self, path: str) -> dict[str, Any]:
         """Values of ``path`` by name; the default value has the name ``""``."""
+
+
+class WritableRegistry(Registry, Protocol):
+    def typed_values(self, path: str) -> dict[str, tuple[int, Any]]:
+        """Values of ``path`` as (type, data)."""
+
+    def set_value(self, path: str, name: str, value_type: int, data: Any) -> None:
+        """Create the key if needed and write one value."""
+
+    def delete_value(self, path: str, name: str) -> None:
+        """Remove one value; nothing happens if it is not there."""
+
+
+def _guess_type(data: Any) -> int:
+    if isinstance(data, bool) or isinstance(data, int):
+        return REG_DWORD
+    if isinstance(data, bytes):
+        return REG_BINARY
+    if isinstance(data, list):
+        return REG_MULTI_SZ
+    return REG_SZ
 
 
 def reg_value(registry: Registry, path: str, name: str, default: Any = None) -> Any:
@@ -59,6 +84,15 @@ class NullRegistry:
     def values(self, path: str) -> dict[str, Any]:
         return {}
 
+    def typed_values(self, path: str) -> dict[str, tuple[int, Any]]:
+        return {}
+
+    def set_value(self, path: str, name: str, value_type: int, data: Any) -> None:
+        pass
+
+    def delete_value(self, path: str, name: str) -> None:
+        pass
+
 
 class DictRegistry:
     """In-memory registry: ``{"HKLM\\Software\\X": {"Name": "value"}}``."""
@@ -66,6 +100,7 @@ class DictRegistry:
     def __init__(self, data: Mapping[str, Mapping[str, Any]] | None = None) -> None:
         # normalized lower-case path -> (path with original case, values)
         self._keys: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._types: dict[tuple[str, str], int] = {}
         for path, values in (data or {}).items():
             self.set(path, values)
 
@@ -96,6 +131,28 @@ class DictRegistry:
     def values(self, path: str) -> dict[str, Any]:
         entry = self._keys.get(self._canonical(path).lower())
         return dict(entry[1]) if entry else {}
+
+    def typed_values(self, path: str) -> dict[str, tuple[int, Any]]:
+        norm = self._canonical(path).lower()
+        return {
+            name: (self._types.get((norm, name.lower()), _guess_type(data)), data)
+            for name, data in self.values(path).items()
+        }
+
+    def set_value(self, path: str, name: str, value_type: int, data: Any) -> None:
+        self.set(path, {})
+        norm = self._canonical(path).lower()
+        values = self._keys[norm][1]
+        for existing in [k for k in values if k.lower() == name.lower()]:
+            del values[existing]
+        values[name] = data
+        self._types[(norm, name.lower())] = value_type
+
+    def delete_value(self, path: str, name: str) -> None:
+        entry = self._keys.get(self._canonical(path).lower())
+        if entry:
+            for existing in [k for k in entry[1] if k.lower() == name.lower()]:
+                del entry[1][existing]
 
 
 class WinRegistry:
@@ -139,20 +196,38 @@ class WinRegistry:
         return names
 
     def values(self, path: str) -> dict[str, Any]:
+        return {name: data for name, (_type, data) in self.typed_values(path).items()}
+
+    def typed_values(self, path: str) -> dict[str, tuple[int, Any]]:
         key = self._open(path)
         if key is None:
             return {}
-        result: dict[str, Any] = {}
+        result: dict[str, tuple[int, Any]] = {}
         with key:
             index = 0
             while True:
                 try:
-                    name, data, _type = self._winreg.EnumValue(key, index)
+                    name, data, value_type = self._winreg.EnumValue(key, index)
                 except OSError:
                     break
-                result[name] = data
+                result[name] = (value_type, data)
                 index += 1
         return result
+
+    def set_value(self, path: str, name: str, value_type: int, data: Any) -> None:
+        hive, sub = split_hive(path)
+        access = self._winreg.KEY_WRITE | self._winreg.KEY_WOW64_64KEY
+        with self._winreg.CreateKeyEx(self._hives[hive], sub, 0, access) as key:
+            self._winreg.SetValueEx(key, name, 0, value_type, data)
+
+    def delete_value(self, path: str, name: str) -> None:
+        hive, sub = split_hive(path)
+        access = self._winreg.KEY_SET_VALUE | self._winreg.KEY_WOW64_64KEY
+        try:
+            with self._winreg.OpenKey(self._hives[hive], sub, 0, access) as key:
+                self._winreg.DeleteValue(key, name)
+        except FileNotFoundError:
+            pass
 
 
 def system_registry() -> Registry:
