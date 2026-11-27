@@ -8,6 +8,7 @@ def test_report_lists_launchers_games_and_environment(demo_ctx):
     text = build_report(result, demo_ctx)
     assert "Компьютер: CLUB-PC-07" in text
     assert "SmartShell: найден" in text
+    assert "Заморозка диска: Shadow Defender" in text
     assert "=== Лаунчеры: найдено 8 из 8, игр: 14 ===" in text
     assert "Dota 2 | id 570 | версия 18690011" in text and "Нужно обновление" in text
     assert "steam: " in text  # launcher protocols

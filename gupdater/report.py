@@ -14,6 +14,7 @@ from pathlib import Path
 
 from gupdater import __version__
 from gupdater.core.context import SystemContext, UninstallEntry, disk_usage
+from gupdater.core.freeze import disk_freeze
 from gupdater.core.models import GameStatus, LauncherScan, format_size
 from gupdater.core.registry import reg_str
 from gupdater.launchers import ALL_LAUNCHERS
@@ -43,6 +44,7 @@ class Inventory:
     os_name: str = ""
     drives: list[tuple[str, int, int]] = field(default_factory=list)  # (root, total, free)
     smartshell: list[str] = field(default_factory=list)
+    disk_freeze: list[str] = field(default_factory=list)
     programs: list[UninstallEntry] = field(default_factory=list)
     processes: list[str] = field(default_factory=list)
     protocols: dict[str, str] = field(default_factory=dict)
@@ -72,6 +74,7 @@ def collect_inventory(ctx: SystemContext) -> Inventory:
         key=lambda e: e.display_name.lower(),
     )
     inv.processes = sorted(p for p in ctx.running if any(k in p for k in _PROCESS_KEYWORDS))
+    inv.disk_freeze = disk_freeze(ctx)
 
     for scheme in ctx.registry.subkeys("HKCR"):
         lowered = scheme.lower()
@@ -147,6 +150,7 @@ def build_report(result: ScanResult, ctx: SystemContext) -> str:
         f"Компьютер: {inv.computer}",
         f"Система: {inv.os_name}",
         "SmartShell: " + ("найден" if inv.smartshell else "не найден"),
+        "Заморозка диска: " + (", ".join(inv.disk_freeze) or "не найдена"),
     ]
     for drive, total, free in inv.drives:
         lines.append(f"Диск {drive} свободно {format_size(free)} из {format_size(total)}")

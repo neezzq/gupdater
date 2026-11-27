@@ -6,7 +6,7 @@ import threading
 import traceback
 from dataclasses import replace
 
-from PySide6.QtCore import QLockFile, Qt, QThread, QTime, QTimer, QUrl, Signal
+from PySide6.QtCore import QLockFile, QSize, Qt, QThread, QTime, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -36,7 +36,9 @@ from gupdater.report import ScanResult, sanitize, scan_all
 from gupdater.selfupdate import running_exe
 from gupdater.settings import Settings, data_dir, reports_dir, save_settings
 from gupdater.ui.runtime import Runtime
+from gupdater.ui.icons import launcher_icon
 from gupdater.ui.style import BLUE, MUTED, OUTCOME_COLORS
+from gupdater.ui.warnings import environment_warning
 
 _LAUNCHERS = {launcher.id: launcher for launcher in ALL_LAUNCHERS}
 
@@ -109,6 +111,7 @@ class AutopilotTab(QWidget):
         self._lock: QLockFile | None = None
         self._quit_after = False
         self._found: dict[str, str] = {}
+        self._exe: dict[str, str | None] = {}
         self._loading = False
 
         intro = QLabel(
@@ -129,6 +132,10 @@ class AutopilotTab(QWidget):
         self.open_folder_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(reports_dir()))))
         self.stop_button.setEnabled(False)
         self.last_run = QLabel()
+        self.warning = QLabel()
+        self.warning.setObjectName("Warning")
+        self.warning.setWordWrap(True)
+        self.warning.hide()
         self.timing_hint = QLabel()
         self.timing_hint.setWordWrap(True)
         self.timing_hint.setObjectName("Muted")
@@ -145,7 +152,8 @@ class AutopilotTab(QWidget):
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Лаунчер", "На этом ПК", "Состояние"])
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.verticalHeader().setDefaultSectionSize(36)
+        self.table.setIconSize(QSize(22, 22))
         self.table.setShowGrid(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -181,6 +189,7 @@ class AutopilotTab(QWidget):
         self.check_app = QCheckBox("Проверять новые версии GUpdater при запуске")
         self.check_app.setChecked(settings.check_app_updates)
         form = QFormLayout()
+        form.setVerticalSpacing(10)
         form.addRow("Ждать начала загрузки:", self.warmup)
         form.addRow("Закончил, если не качает:", self.quiet)
         form.addRow("Не дольше на один лаунчер:", self.max_time)
@@ -225,6 +234,7 @@ class AutopilotTab(QWidget):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(5000)
+        self.log.setMinimumHeight(90)
         self.log.setPlaceholderText("Здесь будет видно, что делает автопилот.")
         log_box = QGroupBox("Журнал")
         log_layout = QVBoxLayout(log_box)
@@ -235,6 +245,7 @@ class AutopilotTab(QWidget):
         layout.addWidget(intro)
         layout.addLayout(top)
         layout.addWidget(self.timing_hint)
+        layout.addWidget(self.warning)
         layout.addLayout(middle)
         layout.addWidget(log_box, 1)
 
@@ -246,8 +257,21 @@ class AutopilotTab(QWidget):
 
         self._fill_table()
         self._show_last_report()
+        self._heal_schedule()
         self._refresh_task_state()
         self._update_timing_hint()
+
+    def _heal_schedule(self) -> None:
+        """A frozen system disk forgets the scheduled task on reboot: put it back."""
+        exe = running_exe()
+        if self._runtime.demo or exe is None or not self.settings.schedule_enabled:
+            return
+        try:
+            if not scheduler.task_exists():
+                scheduler.create_task(exe, self.settings.schedule_time)
+                self._status("Задание расписания пропало (видимо, откат диска) — восстановил")
+        except scheduler.SchedulerError as exc:
+            self._status(f"Не удалось восстановить расписание: {exc}")
 
     def _update_timing_hint(self) -> None:
         least = (self.warmup.value() + self.quiet.value()) / 60
@@ -273,7 +297,7 @@ class AutopilotTab(QWidget):
         ids = self.settings.ordered_ids()
         self.table.setRowCount(len(ids))
         for row, launcher_id in enumerate(ids):
-            name = QTableWidgetItem(_LAUNCHERS[launcher_id].name)
+            name = QTableWidgetItem(launcher_icon(launcher_id, self._exe.get(launcher_id)), _LAUNCHERS[launcher_id].name)
             name.setData(Qt.ItemDataRole.UserRole, launcher_id)
             name.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable)
             name.setCheckState(Qt.CheckState.Checked if self.settings.is_enabled(launcher_id) else Qt.CheckState.Unchecked)
@@ -320,14 +344,19 @@ class AutopilotTab(QWidget):
             else:
                 text = "Не найден"
             self._found[scan.launcher_id] = text
+            self._exe[scan.launcher_id] = scan.exe_path
             row = self._row_of(scan.launcher_id)
             if row >= 0:
+                self.table.item(row, 0).setIcon(launcher_icon(scan.launcher_id, scan.exe_path))
                 item = self.table.item(row, 1)
                 item.setText(text)
                 if scan.installed:
                     item.setData(Qt.ItemDataRole.ForegroundRole, None)
                 else:
                     item.setForeground(QBrush(QColor(MUTED)))
+        warning = environment_warning(result, self._runtime.demo)
+        self.warning.setText(warning)
+        self.warning.setVisible(bool(warning))
 
     def _save(self) -> None:
         if self._loading:

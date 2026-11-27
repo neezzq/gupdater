@@ -6,7 +6,7 @@ import time
 import traceback
 from typing import Callable
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QSize, Qt, QThread, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -26,21 +26,26 @@ from PySide6.QtWidgets import (
 
 from gupdater.autopilot.engine import close_launcher
 from gupdater.autopilot.login_wizard import LoginWizard, WizardError
+from gupdater.core.freeze import disk_freeze, freeze_advice
 from gupdater.launchers import ALL_LAUNCHERS
 from gupdater.launchers.base import Launcher
 from gupdater.logins import Logins, Vault
 from gupdater.report import ScanResult
 from gupdater.settings import Settings, logins_dir, save_settings
 from gupdater.ui.runtime import Runtime
+from gupdater.ui.icons import launcher_icon
 from gupdater.ui.style import GREEN, MUTED
 from gupdater.ui.theme import dark_title_bar
+from gupdater.ui.warnings import environment_warning
 
 _BY_ID = {launcher.id: launcher for launcher in ALL_LAUNCHERS}
 _KNOWN = {"steam", "epic", "riot", "battlenet"}
 
 
 def make_logins(runtime: Runtime, settings: Settings) -> Logins:
-    return Logins(Vault(logins_dir()), runtime.registry_factory(), enabled=settings.use_club_logins)
+    frozen = bool(disk_freeze(runtime.context_factory()))
+    return Logins(Vault(logins_dir()), runtime.registry_factory(), enabled=settings.use_club_logins,
+                  allow_refresh=not frozen)
 
 
 def recover_logins(runtime: Runtime, settings: Settings, log: Callable[[str], None]) -> list[str]:
@@ -92,6 +97,7 @@ class LoginWizardDialog(QDialog):
         )
         self._job: _Job | None = None
         self._stage = "start"
+        self._freeze = disk_freeze(runtime.context_factory())
 
         self.step = QLabel()
         font = self.step.font()
@@ -152,12 +158,12 @@ class LoginWizardDialog(QDialog):
     def _show_start(self) -> None:
         name = self.launcher.name
         self._stage = "start"
-        self._show(
-            "Шаг 1 из 2",
-            f"GUpdater закроет {name} и запомнит, как он выглядит сейчас — с аккаунтом игрока или без него. "
-            "Ничего не удаляется, никто не выходит из аккаунта.",
-            "Начать",
-        )
+        text = (f"GUpdater закроет {name} и запомнит, как он выглядит сейчас — с аккаунтом игрока или без него. "
+                "Ничего не удаляется, никто не выходит из аккаунта.")
+        if self._freeze:
+            text += (f"\n\nНа этом ПК стоит {', '.join(self._freeze)}. Если защита сейчас включена, лучше сначала "
+                     "выключить её: тогда сохранённый вход точно переживёт перезагрузку.")
+        self._show("Шаг 1 из 2", text, "Начать")
 
     def _next(self) -> None:
         name = self.launcher.name
@@ -226,22 +232,29 @@ class LoginsTab(QWidget):
         self.settings = settings
         self._status = status
         self._installed: dict[str, bool] = {}
+        self._exe: dict[str, str | None] = {}
 
         intro = QLabel(
             "Игроки сидят в лаунчерах под своими аккаунтами. GUpdater подставляет вход клуба только на время "
-            "обновления и потом возвращает лаунчер в прежнее состояние. Вход хранится зашифрованным: прочитать его "
-            "может только этот пользователь Windows на этом компьютере."
+            "обновления и потом возвращает лаунчер в прежнее состояние, так что игры обновляются, даже если после "
+            "перезагрузки все вышли из аккаунтов. Вход хранится рядом с GUpdater, зашифрованный ключом этого "
+            "компьютера: на другом ПК файл бесполезен."
         )
         intro.setWordWrap(True)
         intro.setObjectName("Muted")
         self.use = QCheckBox("Подставлять вход клуба при обновлении")
         self.use.setChecked(settings.use_club_logins)
         self.use.toggled.connect(self._toggle_use)
+        self.warning = QLabel()
+        self.warning.setObjectName("Warning")
+        self.warning.setWordWrap(True)
+        self.warning.hide()
 
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Лаунчер", "Вход клуба", "Как ищется", ""])
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(46)
+        self.table.setIconSize(QSize(24, 24))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -257,6 +270,7 @@ class LoginsTab(QWidget):
         layout.setSpacing(10)
         layout.addWidget(intro)
         layout.addWidget(self.use)
+        layout.addWidget(self.warning)
         layout.addWidget(self.table, 1)
         self.refresh()
 
@@ -266,6 +280,10 @@ class LoginsTab(QWidget):
 
     def set_scan(self, result: ScanResult) -> None:
         self._installed = {scan.launcher_id: scan.installed for scan in result.scans}
+        self._exe = {scan.launcher_id: scan.exe_path for scan in result.scans}
+        warning = environment_warning(result, self._runtime.demo)
+        self.warning.setText(warning)
+        self.warning.setVisible(bool(warning))
         self.refresh()
 
     def refresh(self) -> None:
@@ -276,7 +294,7 @@ class LoginsTab(QWidget):
             launcher = _BY_ID[launcher_id]
             installed = self._installed.get(launcher_id, True)
             info = vault.info(launcher_id)
-            self.table.setItem(row, 0, QTableWidgetItem(launcher.name))
+            self.table.setItem(row, 0, QTableWidgetItem(launcher_icon(launcher_id, self._exe.get(launcher_id)), launcher.name))
             if info:
                 saved = time.strftime("%d.%m.%Y %H:%M", time.localtime(info.get("saved_at", 0)))
                 text = f"Запомнен {saved}"

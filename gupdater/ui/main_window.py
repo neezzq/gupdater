@@ -73,7 +73,7 @@ class MainWindow(QMainWindow):
         self._download: DownloadThread | None = None
 
         self.setWindowTitle(f"GUpdater {__version__}" + (" — демо" if runtime.demo else ""))
-        self.resize(1280, 860)
+        self.resize(1280, 900)
 
         logo = QLabel()
         logo.setPixmap(logo_pixmap(46, self.devicePixelRatioF()))

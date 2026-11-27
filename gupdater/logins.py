@@ -352,10 +352,11 @@ class Vault:
 class ClubSession:
     """Puts the club's login in for one update and takes it out again."""
 
-    def __init__(self, vault: Vault, registry: WritableRegistry, launcher_id: str) -> None:
+    def __init__(self, vault: Vault, registry: WritableRegistry, launcher_id: str, allow_refresh: bool = True) -> None:
         self.vault = vault
         self.registry = registry
         self.launcher_id = launcher_id
+        self.allow_refresh = allow_refresh
         self.spec = vault.spec(launcher_id)
         self._aside: State | None = None
 
@@ -370,7 +371,7 @@ class ClubSession:
         if self._aside is None:
             return False
         kept = False
-        if keep_renewed_login:
+        if keep_renewed_login and self.allow_refresh:
             now = capture(self.spec, self.registry)
             club = self.vault.load_club(self.launcher_id)
             # Only if the login files are still there (the launcher did not sign out).
@@ -387,14 +388,17 @@ class ClubSession:
 class Logins:
     """What the autopilot needs: whether to swap, and how."""
 
-    def __init__(self, vault: Vault, registry: WritableRegistry, enabled: bool = True) -> None:
+    def __init__(self, vault: Vault, registry: WritableRegistry, enabled: bool = True, allow_refresh: bool = True) -> None:
         self.vault = vault
         self.registry = registry
         self.enabled = enabled
+        # With a frozen system disk a login the launcher renews may be sealed with keys
+        # that vanish on reboot; then the wizard's login is kept as it is.
+        self.allow_refresh = allow_refresh
 
     def session_for(self, launcher_id: str) -> ClubSession | None:
         if self.enabled and self.vault.has_club(launcher_id):
-            return ClubSession(self.vault, self.registry, launcher_id)
+            return ClubSession(self.vault, self.registry, launcher_id, self.allow_refresh)
         return None
 
     def recover(self, close: Callable[[str], None], log: Callable[[str], None]) -> list[str]:

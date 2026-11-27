@@ -5,7 +5,7 @@ from __future__ import annotations
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QSize, QThread, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from gupdater.core.context import SystemContext
 from gupdater.core.models import GameStatus, LauncherScan, format_size
 from gupdater.report import ScanResult, build_report, default_report_name, run_scan
+from gupdater.ui.icons import launcher_icon
 from gupdater.ui.runtime import Runtime
 from gupdater.ui.style import MUTED, STATUS_COLORS
 
@@ -80,6 +81,7 @@ class GamesTab(QWidget):
         self.tree.setHeaderLabels(["Лаунчер / игра", "Статус", "Версия", "Размер", "Где находится"])
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
+        self.tree.setIconSize(QSize(20, 20))
         head = self.tree.header()
         head.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         head.setStretchLastSection(True)
@@ -144,6 +146,7 @@ class GamesTab(QWidget):
         bold.setBold(True)
         for scan in result.scans:
             item = QTreeWidgetItem([scan.name, launcher_state(scan), scan.version or "", "", scan.exe_path or "не найден"])
+            item.setIcon(0, launcher_icon(scan.launcher_id, scan.exe_path))
             item.setFont(0, bold)
             if not scan.installed:
                 for col in range(5):

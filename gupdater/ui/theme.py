@@ -21,6 +21,8 @@ _QSS = """
 QToolTip { background: #2A2D33; color: %(text)s; border: 1px solid rgba(255,255,255,40); border-radius: 8px; padding: 6px; }
 QLabel#Muted { color: %(text2)s; }
 QLabel#Title { font-size: 20pt; font-weight: 700; }
+QLabel#Warning { background: rgba(255,159,10,28); border: 1px solid rgba(255,159,10,96); border-radius: 12px;
+                 padding: 8px 12px; color: #FFD9A0; }
 QLabel#Chip { background: rgba(255,255,255,20); border: 1px solid rgba(255,255,255,31); border-radius: 10px;
               padding: 2px 10px; color: #C9CDD4; }
 

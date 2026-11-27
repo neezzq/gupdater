@@ -96,7 +96,7 @@ def test_vault_keeps_logins_encrypted_and_tracks_set_aside_state(tmp_path):
     vault.save_club("steam", State(files={"a": b"club"}), spec, learned=False)
     assert vault.has_club("steam") and vault.spec("steam") == spec
     raw = (tmp_path / "vault" / "steam.club").read_bytes()
-    assert raw.startswith(b"GUPDATER-NOT-ENCRYPTED")  # off Windows; on Windows it is DPAPI
+    assert raw.startswith(b"GUPDATER-V2") and b"club" not in raw
     assert vault.load_club("steam").files == {"a": b"club"}
 
     vault.save_aside("steam", State(files={"a": b"player"}))
@@ -256,3 +256,47 @@ def test_cancelled_wizard_takes_the_fresh_login_out(tmp_path):
     wizard.cancel()
     assert not token.exists()  # nobody was signed in before, nobody is now
     assert not vault.has_club("fake")
+
+
+def test_encryption_is_tied_to_this_computer_and_detects_tampering(monkeypatch):
+    import pytest
+
+    from gupdater.core import secret
+
+    monkeypatch.setenv("GUPDATER_MACHINE_ID", "club-pc-07")
+    data = b"club-token" * 1000
+    blob = secret.protect(data)
+    assert b"club-token" not in blob
+    assert secret.unprotect(blob) == data
+    assert secret.unprotect(secret.protect(b"")) == b""
+    with pytest.raises(secret.SecretError):
+        secret.unprotect(blob[:-1] + bytes([blob[-1] ^ 1]))  # one bit changed
+    monkeypatch.setenv("GUPDATER_MACHINE_ID", "another-pc")
+    with pytest.raises(secret.SecretError, match="другом компьютере"):
+        secret.unprotect(blob)
+
+
+def test_renewed_login_is_not_kept_on_a_frozen_disk(tmp_path):
+    token, reg, vault = _setup(tmp_path)
+    system = FakeSystem()
+    launcher = FakeLauncher(tmp_path, system)
+
+    def handler(sys_, command):
+        sys_.add_proc("fake.exe")
+        token.write_text("club-token-renewed")
+
+    system.on_start[str(launcher.exe)] = handler
+    make_pilot([launcher], system, logins=Logins(vault, reg, allow_refresh=False)).run()
+    assert vault.load_club("fake").files[str(token)] == b"club-token"
+    assert token.read_text() == "player-token"
+
+
+def test_freeze_programs_are_recognised(tmp_path):
+    from gupdater.core.context import SystemContext
+    from gupdater.core.freeze import disk_freeze
+    from gupdater.demo import UNINSTALL
+
+    reg = DictRegistry({rf"{UNINSTALL}\SD": {"DisplayName": "Shadow Defender", "Publisher": "Shadow Defender"}})
+    ctx = SystemContext(registry=reg, env={}, drives=[], running=frozenset({"dfserv.exe"}))
+    assert disk_freeze(ctx) == ["Shadow Defender", "Deep Freeze"]
+    assert disk_freeze(SystemContext(registry=DictRegistry(), env={}, drives=[])) == []

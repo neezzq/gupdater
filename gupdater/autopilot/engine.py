@@ -312,6 +312,9 @@ class Autopilot:
         meter = ActivityMeter(spec)
         was_running = bool(meter.matching(system.processes()))
         session = self.logins.session_for(launcher.id) if self.logins else None
+        if self.logins and self.logins.enabled and session is None:
+            self.log("вход клуба не запомнен — если лаунчер окажется без входа, обновить игры он не сможет "
+                     "(вкладка «Входы»)", run)
         if session and was_running:
             self.log("закрываю, чтобы подставить вход клуба", run)
             self._close(spec, meter, run)

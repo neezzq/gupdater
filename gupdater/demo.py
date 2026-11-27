@@ -178,6 +178,7 @@ def build_demo_context(root: Path) -> SystemContext:
 
     # --- SmartShell and launcher protocols
     program("SmartShell Client", "SmartShell Client", "SmartShell", pf / "SmartShell", "4.2")
+    program("Shadow Defender", "Shadow Defender", "Shadow Defender", pf / "Shadow Defender", "1.5")
     for scheme, exe in (("steam", steam / "steam.exe"), ("battlenet", bnet / "Battle.net Launcher.exe")):
         reg.set(f"HKCR\\{scheme}", {"URL Protocol": ""})
         reg.set(f"HKCR\\{scheme}\\shell\\open\\command", {"": f'"{exe}" "%1"'})
